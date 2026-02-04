@@ -569,11 +569,40 @@ async function executeSubagent(
     // 3. ./letta.js if running from dev (src/index.ts)
     // 4. "letta" (global install)
     const currentScript = process.argv[1] || "";
-    const lettaCmd =
-      process.env.LETTA_CODE_BIN ||
-      (currentScript.endsWith(".js") ? currentScript : null) ||
-      (currentScript.includes("src/index.ts") ? "./letta.js" : null) ||
-      "letta";
+
+    // Spawn Letta Code in headless mode.
+    // Prefer using the same entrypoint/runtime as the current process:
+    // 1. LETTA_CODE_BIN env var (explicit override; should be an executable)
+    // 2. Current process argv[1] if it's a .js file (built letta.js)
+    // 3. If running from source (src/index.ts), respawn via the current runtime
+    //    (e.g. bun) and pass the script path explicitly.
+    // 4. "letta" (global install)
+    let lettaCmd = process.env.LETTA_CODE_BIN || "";
+    const lettaCmdArgsPrefix: string[] = [];
+
+    if (!lettaCmd) {
+      if (currentScript.endsWith(".js")) {
+        lettaCmd = currentScript;
+      } else if (currentScript.includes("src/index.ts")) {
+        // When running from source (via Bun), we must respawn via Bun and include the
+        // same loader flags used by our wrapper; otherwise Bun will try to parse
+        // imported markdown prompt assets as JS and crash immediately.
+        //
+        // This also fixes a common failure mode where previous logic tried to spawn
+        // `./letta.js` relative to the user's cwd (often missing), resulting in:
+        //   "Subagent exited with code null"
+        lettaCmd = process.argv[0] || "bun";
+        lettaCmdArgsPrefix.push(
+          "--loader=.md:text",
+          "--loader=.mdx:text",
+          "--loader=.txt:text",
+          currentScript,
+        );
+      } else {
+        lettaCmd = "letta";
+      }
+    }
+
     // Pass parent agent ID so subagents can access parent's context (e.g., search history)
     let parentAgentId: string | undefined;
     try {
@@ -590,7 +619,7 @@ async function executeSubagent(
     const inheritedBaseUrl =
       process.env.LETTA_BASE_URL || settings.env?.LETTA_BASE_URL;
 
-    const proc = spawn(lettaCmd, cliArgs, {
+    const proc = spawn(lettaCmd, [...lettaCmdArgsPrefix, ...cliArgs], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -641,9 +670,14 @@ async function executeSubagent(
     });
 
     // Wait for process to complete
+    // Note: if spawn fails (e.g. command not found), `close` may never fire.
+    let spawnError: unknown = null;
     const exitCode = await new Promise<number | null>((resolve) => {
       proc.on("close", resolve);
-      proc.on("error", () => resolve(null));
+      proc.on("error", (err) => {
+        spawnError = err;
+        resolve(null);
+      });
     });
 
     // Clean up abort listener
@@ -690,7 +724,10 @@ async function executeSubagent(
         conversationId: state.conversationId || undefined,
         report: "",
         success: false,
-        error: stderr || `Subagent exited with code ${exitCode}`,
+        error:
+          stderr ||
+          (spawnError ? getErrorMessage(spawnError) : "") ||
+          `Subagent exited with code ${exitCode}`,
       };
     }
 
