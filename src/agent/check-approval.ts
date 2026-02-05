@@ -11,6 +11,10 @@ import { debugWarn } from "../utils/debug";
 // Number of recent messages to backfill when resuming a session
 const MESSAGE_HISTORY_LIMIT = 15;
 
+// Fetch more than we render so non-rendered tail events (e.g. usage/stop chunks)
+// don't push the last user-visible assistant message out of the backfill window.
+const BACKFILL_FETCH_LIMIT = 100;
+
 /**
  * Check if message backfilling is enabled via LETTA_BACKFILL env var.
  * Defaults to true. Set LETTA_BACKFILL=0 or LETTA_BACKFILL=false to disable.
@@ -90,8 +94,27 @@ export function extractApprovals(messageToCheck: Message): {
  * Messages should already be in chronological order (oldest first).
  */
 function prepareMessageHistory(messages: Message[]): Message[] {
-  const historyCount = Math.min(MESSAGE_HISTORY_LIMIT, messages.length);
-  let messageHistory = messages.slice(-historyCount);
+  const isRenderable = (msg: Message): boolean => {
+    const t = msg.message_type;
+    if (
+      t === "user_message" ||
+      t === "assistant_message" ||
+      t === "reasoning_message" ||
+      t === "tool_call_message" ||
+      t === "tool_return_message" ||
+      t === "approval_request_message" ||
+      t === "approval_response_message"
+    ) {
+      return true;
+    }
+    // Newer servers may include extra message types (event/summary) that we render in backfill.
+    const ts = t as string | undefined;
+    return ts === "event_message" || ts === "summary_message";
+  };
+
+  const renderable = messages.filter(isRenderable);
+  const historyCount = Math.min(MESSAGE_HISTORY_LIMIT, renderable.length);
+  let messageHistory = renderable.slice(-historyCount);
 
   // Skip if starts with orphaned tool_return (incomplete turn)
   if (messageHistory[0]?.message_type === "tool_return_message") {
@@ -160,7 +183,7 @@ export async function getResumeData(
             const backfill = await client.conversations.messages.list(
               conversationId,
               {
-                limit: MESSAGE_HISTORY_LIMIT,
+                limit: BACKFILL_FETCH_LIMIT,
                 order: "desc",
               },
             );
@@ -198,7 +221,7 @@ export async function getResumeData(
           const backfillPage = await client.conversations.messages.list(
             conversationId,
             {
-              limit: MESSAGE_HISTORY_LIMIT,
+              limit: BACKFILL_FETCH_LIMIT,
               order: "desc",
             },
           );
@@ -282,7 +305,7 @@ export async function getResumeData(
       if (isBackfillEnabled()) {
         try {
           const messagesPage = await client.agents.messages.list(agent.id, {
-            limit: MESSAGE_HISTORY_LIMIT,
+            limit: BACKFILL_FETCH_LIMIT,
             order: "desc",
             conversation_id: "default", // Key: filter to default conversation only
           });

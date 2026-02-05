@@ -160,15 +160,7 @@ function renderUserContentParts(
   return rendered.join("\n\n");
 }
 
-export function backfillBuffers(buffers: Buffers, history: Message[]): void {
-  // Clear buffers to ensure idempotency (in case this is called multiple times)
-  buffers.order = [];
-  buffers.byId.clear();
-  buffers.toolCallIdToLineId.clear();
-  buffers.pendingToolByRun.clear();
-  buffers.lastOtid = null;
-  // Note: we don't reset tokenCount here (it resets per-turn in onSubmit)
-
+function ingestMessages(buffers: Buffers, history: Message[]): void {
   // Iterate over the history and add the messages to the buffers
   // Want to add user, reasoning, assistant, tool call + tool return
   for (const msg of history) {
@@ -272,6 +264,36 @@ export function backfillBuffers(buffers: Buffers, history: Message[]): void {
           const toolCallId = toolCall.tool_call_id;
           // Skip if any required fields are missing
           if (!toolCallId || !toolCall.name || !toolCall.arguments) continue;
+
+          // Idempotence: if we've already seen this tool_call_id (e.g. follow polling
+          // re-delivers the same message or returns multiple variants), reuse the
+          // same lineId instead of allocating a new one.
+          const existingLineIdForToolCall =
+            buffers.toolCallIdToLineId.get(toolCallId);
+          if (existingLineIdForToolCall) {
+            const existingLine = buffers.byId.get(existingLineIdForToolCall);
+            if (existingLine && existingLine.kind === "tool_call") {
+              // Update in-place without losing return/phase fields.
+              buffers.byId.set(existingLineIdForToolCall, {
+                ...existingLine,
+                toolCallId,
+                name: toolCall.name,
+                argsText: toolCall.arguments,
+              });
+            } else {
+              const exists = buffers.byId.has(existingLineIdForToolCall);
+              buffers.byId.set(existingLineIdForToolCall, {
+                kind: "tool_call",
+                id: existingLineIdForToolCall,
+                toolCallId,
+                name: toolCall.name,
+                argsText: toolCall.arguments,
+                phase: "ready",
+              });
+              if (!exists) buffers.order.push(existingLineIdForToolCall);
+            }
+            continue;
+          }
 
           // For parallel tool calls, create unique line ID for each
           // Must match the streaming logic: first tool uses base lineId,
@@ -427,6 +449,26 @@ export function backfillBuffers(buffers: Buffers, history: Message[]): void {
       }
     }
   }
+}
+
+export function backfillBuffers(
+  buffers: Buffers,
+  history: Message[],
+  opts?: { clear?: boolean },
+): void {
+  const shouldClear = opts?.clear ?? true;
+
+  if (shouldClear) {
+    // Clear buffers to ensure idempotency (in case this is called multiple times)
+    buffers.order = [];
+    buffers.byId.clear();
+    buffers.toolCallIdToLineId.clear();
+    buffers.pendingToolByRun.clear();
+    buffers.lastOtid = null;
+    // Note: we don't reset tokenCount here (it resets per-turn in onSubmit)
+  }
+
+  ingestMessages(buffers, history);
 
   // Mark stray tool calls as closed
   // Walk backwards: any pending tool_call before the first "transition" (non-pending-tool-call) is stray
@@ -452,4 +494,17 @@ export function backfillBuffers(buffers: Buffers, history: Message[]): void {
       foundTransition = true;
     }
   }
+}
+
+/**
+ * Merge additional messages into an existing transcript.
+ * Used for asynchronous polling/following of a conversation.
+ */
+export function appendMessagesToBuffers(
+  buffers: Buffers,
+  history: Message[],
+): void {
+  // Incremental updates should not run backfill-only cleanup such as marking
+  // stray tool calls as closed.
+  ingestMessages(buffers, history);
 }
