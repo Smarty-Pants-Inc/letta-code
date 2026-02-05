@@ -2,8 +2,9 @@
 name: recall
 description: Search conversation history to recall past discussions, decisions, and context
 tools: Bash, Read, BashOutput
-model: opus
+model: gpt-5.2-low
 memoryBlocks: none
+skills: searching-messages
 mode: stateless
 ---
 
