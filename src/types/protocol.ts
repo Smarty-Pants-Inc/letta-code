@@ -263,7 +263,8 @@ export interface ControlRequest {
 // SDK → CLI request subtypes
 export type SdkToCliControlRequest =
   | { subtype: "initialize" }
-  | { subtype: "interrupt" };
+  | { subtype: "interrupt" }
+  | { subtype: "set_ephemeral_context"; value: string };
 
 // CLI → SDK request subtypes
 export interface CanUseToolControlRequest {
