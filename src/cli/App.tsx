@@ -9553,6 +9553,25 @@ ${SYSTEM_REMINDER_CLOSE}
     permissionMode.getMode(),
   );
 
+  // Keep the permissionMode singleton in sync with the UI state.
+  // This guards against any rare desync where the footer shows YOLO but
+  // permission checks still run in default mode.
+  useEffect(() => {
+    const singletonMode = permissionMode.getMode();
+    if (singletonMode === uiPermissionMode) return;
+
+    // If entering plan mode via UI state, ensure a plan file path is set.
+    if (uiPermissionMode === "plan" && !permissionMode.getPlanFilePath()) {
+      const planPath = generatePlanFilePath();
+      permissionMode.setPlanFilePath(planPath);
+    }
+
+    permissionMode.setMode(uiPermissionMode);
+  }, [uiPermissionMode]);
+
+  // If yolo-ralph temporarily flips permissions, restore prior mode on exit.
+  const permissionModeBeforeRalphRef = useRef<PermissionMode | null>(null);
+
   // Handle ralph mode exit from Input component (shift+tab)
   const handleRalphExit = useCallback(() => {
     const ralph = ralphMode.getState();
