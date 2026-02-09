@@ -612,6 +612,13 @@ export function Input({
     }
 
     if (key.shift && key.tab) {
+      if (process.env.LETTA_DEBUG_PERMISSION_MODE === "1") {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[debug:permissionMode] shift+tab: cycling from ${currentMode} (input=${JSON.stringify(_input)})`,
+        );
+      }
+
       // If ralph mode is active, exit it first (goes to default mode)
       if (ralphActive && onRalphExit) {
         onRalphExit();
