@@ -10571,8 +10571,6 @@ ${SYSTEM_REMINDER_CLOSE}
     permissionMode.setMode(uiPermissionMode);
   }, [uiPermissionMode]);
 
-  // If yolo-ralph temporarily flips permissions, restore prior mode on exit.
-  const permissionModeBeforeRalphRef = useRef<PermissionMode | null>(null);
   // Handle ralph mode exit from Input component (shift+tab)
   const handleRalphExit = useCallback(() => {
     const ralph = ralphMode.getState();
