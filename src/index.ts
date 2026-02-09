@@ -890,8 +890,9 @@ async function main(): Promise<void> {
   // Set permission mode if provided (or via --yolo alias)
   const permissionModeValue = values["permission-mode"] as string | undefined;
   const yoloMode = values.yolo as boolean | undefined;
+  const didSetPermissionModeFromArgs = Boolean(yoloMode || permissionModeValue);
 
-  if (yoloMode || permissionModeValue) {
+  if (didSetPermissionModeFromArgs) {
     if (yoloMode) {
       // --yolo is an alias for --permission-mode bypassPermissions
       permissionMode.setMode("bypassPermissions");
@@ -1862,6 +1863,23 @@ async function main(): Promise<void> {
           const data = await getResumeData(client, freshAgent, "default");
           setResumeData(data);
           setResumedExistingConversation(true);
+        }
+
+        // Restore persisted permission mode for this conversation as early as possible
+        // so the UI + approval harness start in the expected mode after restarts.
+        // Explicit CLI flags (--yolo/--permission-mode) take precedence.
+        if (!didSetPermissionModeFromArgs) {
+          try {
+            const storedMode = settingsManager.getConversationPermissionMode(
+              agent.id,
+              conversationIdToUse,
+            );
+            if (storedMode && storedMode !== "plan") {
+              permissionMode.setMode(storedMode);
+            }
+          } catch {
+            // Best-effort only
+          }
         }
 
         // Save the session (agent + conversation) to settings

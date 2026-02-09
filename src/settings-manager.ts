@@ -4,6 +4,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HooksConfig } from "./hooks/types";
+import type { PermissionMode } from "./permissions/mode";
 import type { PermissionRules } from "./permissions/types";
 import { debugWarn } from "./utils/debug.js";
 import { exists, mkdir, readFile, writeFile } from "./utils/fs.js";
@@ -57,6 +58,10 @@ export interface Settings {
   // Per-conversation prompt history for the interactive TUI (up/down arrows).
   // Keyed by server, then by `${agentId}:${conversationId}`.
   promptHistoryByServer?: Record<string, Record<string, string[]>>;
+
+  // Per-conversation permission mode (e.g., persist YOLO/bypassPermissions).
+  // Keyed by server, then by `${agentId}:${conversationId}`.
+  permissionModeByServer?: Record<string, Record<string, PermissionMode>>;
 
   // Unified agent settings array (replaces pinnedAgentsByServer)
   agents?: AgentSettings[];
@@ -1065,6 +1070,64 @@ class SettingsManager {
     delete serverMap[key];
     promptHistoryByServer[serverKey] = serverMap;
     this.updateSettings({ promptHistoryByServer });
+  }
+
+  // =====================================================================
+  // Permission Mode (Per Conversation)
+  // =====================================================================
+
+  private getPermissionModeKey(
+    agentId: string,
+    conversationId: string,
+  ): string {
+    return `${agentId}:${conversationId}`;
+  }
+
+  getConversationPermissionMode(
+    agentId: string,
+    conversationId: string,
+  ): PermissionMode | null {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPermissionModeKey(agentId, conversationId);
+
+    const byServer = settings.permissionModeByServer?.[serverKey];
+    const mode = byServer?.[key];
+    return typeof mode === "string" ? (mode as PermissionMode) : null;
+  }
+
+  setConversationPermissionMode(
+    agentId: string,
+    conversationId: string,
+    mode: PermissionMode,
+    maxConversations = 200,
+  ): void {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPermissionModeKey(agentId, conversationId);
+
+    const permissionModeByServer = {
+      ...(settings.permissionModeByServer || {}),
+    };
+    const serverMap = { ...(permissionModeByServer[serverKey] || {}) };
+
+    serverMap[key] = mode;
+
+    // Prevent unbounded growth.
+    const keys = Object.keys(serverMap);
+    const excess = keys.length - maxConversations;
+    if (excess > 0) {
+      let remaining = excess;
+      for (const k of keys) {
+        if (k === key) continue;
+        delete serverMap[k];
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+    }
+
+    permissionModeByServer[serverKey] = serverMap;
+    this.updateSettings({ permissionModeByServer });
   }
 
   // =====================================================================
