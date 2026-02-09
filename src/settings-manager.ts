@@ -4,6 +4,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HooksConfig } from "./hooks/types";
+import type { PermissionMode } from "./permissions/mode";
 import type { PermissionRules } from "./permissions/types";
 import { debugWarn } from "./utils/debug.js";
 import { exists, mkdir, readFile, writeFile } from "./utils/fs.js";
@@ -53,6 +54,11 @@ export interface Settings {
   // Server-indexed settings (agent IDs are server-specific)
   sessionsByServer?: Record<string, SessionRef>; // key = normalized base URL (e.g., "api.letta.com", "localhost:8283")
   pinnedAgentsByServer?: Record<string, string[]>; // DEPRECATED: use agents array
+
+  // Per-conversation permission mode (e.g., persist YOLO/bypassPermissions).
+  // Keyed by server, then by `${agentId}:${conversationId}`.
+  permissionModeByServer?: Record<string, Record<string, PermissionMode>>;
+
   // Unified agent settings array (replaces pinnedAgentsByServer)
   agents?: AgentSettings[];
   // Letta Cloud OAuth token management (stored separately in secrets)
@@ -971,6 +977,64 @@ class SettingsManager {
     }
     // Fall back to global
     return this.getGlobalLastAgentId();
+  }
+
+  // =====================================================================
+  // Permission Mode (Per Conversation)
+  // =====================================================================
+
+  private getPermissionModeKey(
+    agentId: string,
+    conversationId: string,
+  ): string {
+    return `${agentId}:${conversationId}`;
+  }
+
+  getConversationPermissionMode(
+    agentId: string,
+    conversationId: string,
+  ): PermissionMode | null {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPermissionModeKey(agentId, conversationId);
+
+    const byServer = settings.permissionModeByServer?.[serverKey];
+    const mode = byServer?.[key];
+    return typeof mode === "string" ? (mode as PermissionMode) : null;
+  }
+
+  setConversationPermissionMode(
+    agentId: string,
+    conversationId: string,
+    mode: PermissionMode,
+    maxConversations = 200,
+  ): void {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPermissionModeKey(agentId, conversationId);
+
+    const permissionModeByServer = {
+      ...(settings.permissionModeByServer || {}),
+    };
+    const serverMap = { ...(permissionModeByServer[serverKey] || {}) };
+
+    serverMap[key] = mode;
+
+    // Prevent unbounded growth.
+    const keys = Object.keys(serverMap);
+    const excess = keys.length - maxConversations;
+    if (excess > 0) {
+      let remaining = excess;
+      for (const k of keys) {
+        if (k === key) continue;
+        delete serverMap[k];
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+    }
+
+    permissionModeByServer[serverKey] = serverMap;
+    this.updateSettings({ permissionModeByServer });
   }
 
   // =====================================================================
