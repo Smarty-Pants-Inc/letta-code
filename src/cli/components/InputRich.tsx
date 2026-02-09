@@ -104,6 +104,7 @@ function findCursorLine(
  * Memoized footer component to prevent re-renders during high-frequency
  * shimmer/timer updates. Only updates when its specific props change.
  */
+
 const InputFooter = memo(function InputFooter({
   ctrlCPressed,
   escapePressed,
@@ -113,6 +114,8 @@ const InputFooter = memo(function InputFooter({
   showExitHint,
   agentName,
   currentModel,
+  currentSystemPromptId,
+  currentToolset,
   isOpenAICodexProvider,
   isByokProvider,
   isAutocompleteActive,
@@ -126,6 +129,8 @@ const InputFooter = memo(function InputFooter({
   showExitHint: boolean;
   agentName: string | null | undefined;
   currentModel: string | null | undefined;
+  currentSystemPromptId: string | null | undefined;
+  currentToolset: string | null | undefined;
   isOpenAICodexProvider: boolean;
   isByokProvider: boolean;
   isAutocompleteActive: boolean;
@@ -136,6 +141,50 @@ const InputFooter = memo(function InputFooter({
     return null;
   }
 
+  const compactTag = (value: string, maxLen: number): string => {
+    if (value.length <= maxLen) return value;
+    if (maxLen <= 3) return value.slice(0, maxLen);
+    return `${value.slice(0, maxLen - 3)}...`;
+  };
+
+  // `default` is an alias for our main Claude-optimized prompt (letta-claude).
+  // Showing just `default` isn't very informative, so resolve it for display.
+  const displaySystemPromptId =
+    currentSystemPromptId === "default"
+      ? "letta-claude"
+      : currentSystemPromptId;
+
+  // Use the prompt id for display to avoid long/branding-heavy labels.
+  // Also strip the redundant `letta-` prefix and keep everything lowercase.
+  const systemTagSource = displaySystemPromptId
+    ? displaySystemPromptId.replace(/^letta-/, "")
+    : "?";
+  const systemTag = compactTag(systemTagSource.toLowerCase(), 14);
+
+  const toolsetTag = currentToolset ? compactTag(currentToolset, 10) : "auto";
+
+  const reasoningTokens = new Set(["low", "med", "high", "xhigh"]);
+  let modelBase = currentModel ?? "unknown";
+  let reasoning: string | null = null;
+  if (currentModel) {
+    const parts = currentModel.split("-");
+    const last = parts[parts.length - 1];
+    if (last && reasoningTokens.has(last)) {
+      reasoning = last;
+      modelBase = parts.slice(0, -1).join("-") || currentModel;
+    }
+  }
+
+  const reasoningColor =
+    reasoning === "low"
+      ? colors.footer.reasoningLow
+      : reasoning === "med"
+        ? colors.footer.reasoningMed
+        : reasoning === "high"
+          ? colors.footer.reasoningHigh
+          : reasoning === "xhigh"
+            ? colors.footer.reasoningXHigh
+            : undefined;
   return (
     <Box justifyContent="space-between" marginBottom={1}>
       {ctrlCPressed ? (
@@ -161,15 +210,25 @@ const InputFooter = memo(function InputFooter({
       ) : (
         <Text dimColor>Press / for commands</Text>
       )}
-      <Text>
+      <Text wrap="truncate">
         <Text color={colors.footer.agentName}>{agentName || "Unnamed"}</Text>
-        <Text dimColor>
-          {` [${currentModel ?? "unknown"}`}
-          {isByokProvider && (
-            <Text color={isOpenAICodexProvider ? "#74AA9C" : "yellow"}> ▲</Text>
-          )}
-          {"]"}
-        </Text>
+        <Text dimColor>{" ["}</Text>
+        <Text dimColor>{modelBase}</Text>
+        {reasoning && <Text color={reasoningColor}>{`-${reasoning}`}</Text>}
+        {isByokProvider && (
+          <Text color={isOpenAICodexProvider ? "#74AA9C" : "yellow"}> ▲</Text>
+        )}
+        {systemTag && (
+          <>
+            <Text dimColor> </Text>
+            <Text color={colors.footer.tagLabel}>s:</Text>
+            <Text color={colors.footer.tagValue}>{systemTag}</Text>
+          </>
+        )}
+        <Text dimColor> </Text>
+        <Text color={colors.footer.tagLabel}>t:</Text>
+        <Text color={colors.footer.tagValue}>{toolsetTag}</Text>
+        <Text dimColor>{"]"}</Text>
       </Text>
     </Box>
   );
@@ -204,6 +263,8 @@ export function Input({
   agentName,
   currentModel,
   currentModelProvider,
+  currentSystemPromptId,
+  currentToolset,
   messageQueue,
   onEnterQueueEditMode,
   onEscapeCancel,
@@ -216,6 +277,7 @@ export function Input({
   restoredInput,
   onRestoredInputConsumed,
   networkPhase = null,
+  onCycleReasoningEffort,
 }: {
   visible?: boolean;
   streaming: boolean;
@@ -237,6 +299,8 @@ export function Input({
   agentName?: string | null;
   currentModel?: string | null;
   currentModelProvider?: string | null;
+  currentSystemPromptId?: string | null;
+  currentToolset?: string | null;
   messageQueue?: QueuedMessage[];
   onEnterQueueEditMode?: () => void;
   onEscapeCancel?: () => void;
@@ -249,6 +313,7 @@ export function Input({
   restoredInput?: string | null;
   onRestoredInputConsumed?: () => void;
   networkPhase?: "upload" | "download" | "error" | null;
+  onCycleReasoningEffort?: () => void;
 }) {
   const [value, setValue] = useState("");
   const [escapePressed, setEscapePressed] = useState(false);
@@ -455,6 +520,20 @@ export function Input({
   // Handle Shift+Tab for permission mode cycling (or ralph mode exit)
   useInput((_input, key) => {
     if (!interactionEnabled) return;
+
+    // Tab (no shift): cycle reasoning effort tiers for the current model (when idle).
+    // Only trigger when autocomplete is NOT active.
+    if (
+      key.tab &&
+      !key.shift &&
+      !isAutocompleteActive &&
+      !streaming &&
+      onCycleReasoningEffort
+    ) {
+      onCycleReasoningEffort();
+      return;
+    }
+
     // Debug logging for shift+tab detection
     if (process.env.LETTA_DEBUG_KEYS === "1" && (key.shift || key.tab)) {
       // eslint-disable-next-line no-console
@@ -462,6 +541,7 @@ export function Input({
         `[debug:InputRich] shift=${key.shift} tab=${key.tab} visible=${visible}`,
       );
     }
+
     if (key.shift && key.tab) {
       // If ralph mode is active, exit it first (goes to default mode)
       if (ralphActive && onRalphExit) {
@@ -1014,6 +1094,8 @@ export function Input({
             showExitHint={ralphActive || ralphPending}
             agentName={agentName}
             currentModel={currentModel}
+            currentSystemPromptId={currentSystemPromptId}
+            currentToolset={currentToolset}
             isOpenAICodexProvider={
               currentModelProvider === OPENAI_CODEX_PROVIDER_NAME
             }
