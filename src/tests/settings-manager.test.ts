@@ -261,6 +261,24 @@ describe("Settings Manager - Global Settings", () => {
     expect(settings.tokenStreaming).toBe(true);
     expect(settings.lastAgent).toBe("agent-789");
   });
+
+  test("Conversation permission mode persists", async () => {
+    settingsManager.setConversationPermissionMode(
+      "agent-123",
+      "conv-abc",
+      "bypassPermissions",
+    );
+
+    // Wait for async persist
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await settingsManager.reset();
+    await settingsManager.initialize();
+
+    expect(
+      settingsManager.getConversationPermissionMode("agent-123", "conv-abc"),
+    ).toBe("bypassPermissions");
+  });
 });
 
 // ============================================================================
