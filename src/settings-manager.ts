@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { HooksConfig } from "./hooks/types";
+import type { PermissionMode } from "./permissions/mode";
 import type { PermissionRules } from "./permissions/types";
 import { debugWarn } from "./utils/debug.js";
 import { exists, mkdir, readFile, writeFile } from "./utils/fs.js";
@@ -83,9 +84,9 @@ export interface Settings {
   sessionsByServer?: Record<string, SessionRef>; // key = normalized base URL (e.g., "api.letta.com", "localhost:8283")
   pinnedAgentsByServer?: Record<string, string[]>; // DEPRECATED: use agents array
 
-  // Per-conversation prompt history for the interactive TUI (up/down arrows).
+  // Per-conversation permission mode (e.g., persist YOLO/bypassPermissions).
   // Keyed by server, then by `${agentId}:${conversationId}`.
-  promptHistoryByServer?: Record<string, Record<string, string[]>>;
+  permissionModeByServer?: Record<string, Record<string, PermissionMode>>;
 
   // Unified agent settings array (replaces pinnedAgentsByServer)
   agents?: AgentSettings[];
@@ -1116,55 +1117,47 @@ class SettingsManager {
   }
 
   // =====================================================================
-  // Prompt History (Interactive TUI)
+  // Permission Mode (Per Conversation)
   // =====================================================================
 
-  private getPromptHistoryKey(agentId: string, conversationId: string): string {
+  private getPermissionModeKey(
+    agentId: string,
+    conversationId: string,
+  ): string {
     return `${agentId}:${conversationId}`;
   }
 
-  getPromptHistory(agentId: string, conversationId: string): string[] {
-    const settings = this.getSettings();
-    const serverKey = getCurrentServerKey(settings);
-    const key = this.getPromptHistoryKey(agentId, conversationId);
-
-    const byServer = settings.promptHistoryByServer?.[serverKey];
-    const history = byServer?.[key];
-    return Array.isArray(history) ? [...history] : [];
-  }
-
-  appendPromptHistory(
+  getConversationPermissionMode(
     agentId: string,
     conversationId: string,
-    entry: string,
-    maxEntries = 200,
-    maxConversations = 100,
-  ): void {
-    const normalized = entry.trimEnd();
-    if (!normalized.trim()) return;
-
+  ): PermissionMode | null {
     const settings = this.getSettings();
     const serverKey = getCurrentServerKey(settings);
-    const key = this.getPromptHistoryKey(agentId, conversationId);
+    const key = this.getPermissionModeKey(agentId, conversationId);
 
-    const promptHistoryByServer = { ...(settings.promptHistoryByServer || {}) };
-    const serverMap = { ...(promptHistoryByServer[serverKey] || {}) };
-    const prev = serverMap[key];
-    const history = Array.isArray(prev) ? [...prev] : [];
+    const byServer = settings.permissionModeByServer?.[serverKey];
+    const mode = byServer?.[key];
+    return typeof mode === "string" ? (mode as PermissionMode) : null;
+  }
 
-    const last = history[history.length - 1];
-    if (typeof last === "string" && last.trimEnd() === normalized) {
-      return;
-    }
+  setConversationPermissionMode(
+    agentId: string,
+    conversationId: string,
+    mode: PermissionMode,
+    maxConversations = 200,
+  ): void {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPermissionModeKey(agentId, conversationId);
 
-    history.push(normalized);
-    const trimmed =
-      history.length > maxEntries ? history.slice(-maxEntries) : history;
+    const permissionModeByServer = {
+      ...(settings.permissionModeByServer || {}),
+    };
+    const serverMap = { ...(permissionModeByServer[serverKey] || {}) };
 
-    serverMap[key] = trimmed;
+    serverMap[key] = mode;
 
-    // Prevent unbounded growth in number of conversations stored per server.
-    // Evict oldest keys first (object key order is insertion-ordered in modern JS runtimes).
+    // Prevent unbounded growth.
     const keys = Object.keys(serverMap);
     const excess = keys.length - maxConversations;
     if (excess > 0) {
@@ -1177,26 +1170,8 @@ class SettingsManager {
       }
     }
 
-    promptHistoryByServer[serverKey] = serverMap;
-
-    this.updateSettings({ promptHistoryByServer });
-  }
-
-  clearPromptHistory(agentId: string, conversationId: string): void {
-    const settings = this.getSettings();
-    const serverKey = getCurrentServerKey(settings);
-    const key = this.getPromptHistoryKey(agentId, conversationId);
-
-    const promptHistoryByServer = { ...(settings.promptHistoryByServer || {}) };
-    const serverMap = { ...(promptHistoryByServer[serverKey] || {}) };
-
-    if (!(key in serverMap)) {
-      return;
-    }
-
-    delete serverMap[key];
-    promptHistoryByServer[serverKey] = serverMap;
-    this.updateSettings({ promptHistoryByServer });
+    permissionModeByServer[serverKey] = serverMap;
+    this.updateSettings({ permissionModeByServer });
   }
 
   // =====================================================================
