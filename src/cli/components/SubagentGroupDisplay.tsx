@@ -85,7 +85,10 @@ const AgentRow = memo(
       agent.totalTokens,
       isRunning,
     );
-    const modelDisplay = getSubagentModelDisplay(agent.model);
+    const modelDisplay = getSubagentModelDisplay(
+      agent.model,
+      agent.reasoningEffort,
+    );
     const lastTool = agent.toolCalls[agent.toolCalls.length - 1];
 
     // Condensed mode: simplified view to reduce re-renders when overflowing
@@ -113,6 +116,11 @@ const AgentRow = memo(
               {modelDisplay && (
                 <>
                   <Text dimColor>{` · ${modelDisplay.label}`}</Text>
+                  {modelDisplay.reasoningEffortLabel && (
+                    <Text
+                      dimColor
+                    >{`-${modelDisplay.reasoningEffortLabel}`}</Text>
+                  )}
                   {modelDisplay.isByokProvider && (
                     <Text
                       color={
@@ -171,6 +179,11 @@ const AgentRow = memo(
             {modelDisplay && (
               <>
                 <Text dimColor>{` · ${modelDisplay.label}`}</Text>
+                {modelDisplay.reasoningEffortLabel && (
+                  <Text
+                    dimColor
+                  >{`-${modelDisplay.reasoningEffortLabel}`}</Text>
+                )}
                 {modelDisplay.isByokProvider && (
                   <Text
                     color={

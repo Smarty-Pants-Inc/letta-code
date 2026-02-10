@@ -165,7 +165,12 @@ export function SlashCommandAutocomplete({
     const isActive =
       !hideAutocomplete && (matches.length > 0 || queryLength > 0);
     onActiveChange?.(isActive);
-  }, [hideAutocomplete, matches.length, onActiveChange, queryInfo?.query.length]);
+  }, [
+    hideAutocomplete,
+    matches.length,
+    onActiveChange,
+    queryInfo?.query.length,
+  ]);
 
   // Don't show if input doesn't start with "/"
   if (!currentInput.startsWith("/")) {

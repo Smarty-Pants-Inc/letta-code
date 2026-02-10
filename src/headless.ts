@@ -1204,6 +1204,9 @@ export async function handleHeadlessCommand(
       agent_id: agent.id,
       conversation_id: conversationId,
       model: agent.llm_config?.model ?? "",
+      reasoning_effort: (
+        agent.llm_config as { reasoning_effort?: string | null } | undefined
+      )?.reasoning_effort,
       tools: availableTools,
       cwd: process.cwd(),
       mcp_servers: [],
@@ -2300,6 +2303,9 @@ async function runBidirectionalMode(
     agent_id: agent.id,
     conversation_id: conversationId,
     model: agent.llm_config?.model,
+    reasoning_effort: (
+      agent.llm_config as { reasoning_effort?: string | null } | undefined
+    )?.reasoning_effort,
     tools: availableTools,
     cwd: process.cwd(),
     memfs_enabled: settingsManager.isMemfsEnabled(agent.id),
