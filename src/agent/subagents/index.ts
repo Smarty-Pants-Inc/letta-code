@@ -53,6 +53,10 @@ export interface SubagentConfig {
   allowedTools: string[] | "all";
   /** Recommended model - any model ID from models.json or full handle */
   recommendedModel: string;
+  /** Optional model update args (e.g. reasoning_effort, verbosity, context_window, max_output_tokens) */
+  updateArgs?: Record<string, unknown>;
+  /** Optional toolset override (e.g. codex, default, gemini) */
+  toolset?: string;
   /** Skills to auto-load */
   skills: string[];
   /** Memory blocks the subagent has access to - list of labels or "all" or "none" */
@@ -213,12 +217,26 @@ function parseSubagentContent(content: string): SubagentConfig {
   const name = frontmatter.name as string;
   const description = frontmatter.description as string;
 
+  let updateArgs: Record<string, unknown> | undefined;
+  const updateArgsRaw = getStringField(frontmatter, "updateArgs");
+  if (updateArgsRaw) {
+    try {
+      updateArgs = JSON.parse(updateArgsRaw) as Record<string, unknown>;
+    } catch {
+      // Ignore malformed updateArgs - subagent will fall back to model defaults
+    }
+  }
+
+  const toolset = getStringField(frontmatter, "toolset");
+
   return {
     name,
     description,
     systemPrompt: body,
     allowedTools: parseTools(getStringField(frontmatter, "tools")),
     recommendedModel: getStringField(frontmatter, "model") || "inherit",
+    updateArgs,
+    toolset,
     skills: parseSkills(getStringField(frontmatter, "skills")),
     memoryBlocks: parseMemoryBlocks(
       getStringField(frontmatter, "memoryBlocks"),

@@ -1,8 +1,10 @@
 ---
 name: plan
 description: Planning agent that breaks down complex tasks into actionable steps
-tools: Glob, Grep, Read, LS, BashOutput
-model: gpt-5.2-high
+tools: ReadFile, ListDir, GrepFiles
+model: chatgpt-plus-pro/gpt-5.3-codex
+updateArgs: {"reasoning_effort":"high"}
+toolset: codex
 memoryBlocks: all
 mode: stateless
 ---

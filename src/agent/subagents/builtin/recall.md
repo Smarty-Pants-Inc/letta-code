@@ -1,10 +1,11 @@
 ---
 name: recall
 description: Search conversation history to recall past discussions, decisions, and context
-tools: Bash, Read, BashOutput
-model: gpt-5.2-low
+tools: Shell, ShellCommand, ReadFile
+model: chatgpt-plus-pro/gpt-5.3-codex
+updateArgs: {"reasoning_effort":"low"}
+toolset: codex
 memoryBlocks: none
-skills: searching-messages
 mode: stateless
 ---
 

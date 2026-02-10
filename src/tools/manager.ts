@@ -656,10 +656,16 @@ export async function loadTools(modelIdentifier?: string): Promise<void> {
 export function isOpenAIModel(modelIdentifier: string): boolean {
   const info = getModelInfo(modelIdentifier);
   if (info?.handle && typeof info.handle === "string") {
-    return info.handle.startsWith("openai/");
+    return (
+      info.handle.startsWith("openai/") ||
+      info.handle.startsWith("chatgpt-plus-pro/")
+    );
   }
   // Fallback: treat raw handle-style identifiers as OpenAI if they start with openai/
-  return modelIdentifier.startsWith("openai/");
+  return (
+    modelIdentifier.startsWith("openai/") ||
+    modelIdentifier.startsWith("chatgpt-plus-pro/")
+  );
 }
 
 export function isGeminiModel(modelIdentifier: string): boolean {

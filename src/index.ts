@@ -21,6 +21,7 @@ import { permissionMode } from "./permissions/mode";
 import { settingsManager } from "./settings-manager";
 import { telemetry } from "./telemetry";
 import { loadTools } from "./tools/manager";
+import { toolFilter } from "./tools/filter";
 import { markMilestone } from "./utils/timing";
 
 // Stable empty array constants to prevent new references on every render
@@ -442,6 +443,7 @@ async function main(): Promise<void> {
         memfs: { type: "boolean" },
         "no-memfs": { type: "boolean" },
         "max-turns": { type: "string" },
+        "update-args": { type: "string" }, // Headless-only: JSON updateArgs for model settings
       },
       strict: true,
       allowPositionals: true,
@@ -555,6 +557,12 @@ async function main(): Promise<void> {
   const noMemfsFlag = values["no-memfs"] as boolean | undefined;
   const fromAfFile = values["from-af"] as string | undefined;
   const isHeadless = values.prompt || values.run || !process.stdin.isTTY;
+
+  // Apply tool filtering early so tool loading (headless or TUI) sees it.
+  // This is critical for Task-spawned subagents which use headless mode.
+  if (values.tools !== undefined) {
+    toolFilter.setEnabledTools(values.tools as string);
+  }
 
   // Fail if an unknown command/argument is passed (and we're not in headless mode where it might be a prompt)
   if (command && !isHeadless) {

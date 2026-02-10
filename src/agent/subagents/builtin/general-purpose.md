@@ -1,8 +1,10 @@
 ---
 name: general-purpose
 description: Full-capability agent for research, planning, and implementation
-tools: Bash, BashOutput, Edit, Glob, Grep, KillBash, LS, MultiEdit, Read, TodoWrite, Write
-model: gpt-5.2-high
+tools: Shell, ShellCommand, ReadFile, ListDir, GrepFiles, ApplyPatch, UpdatePlan, Write, Edit
+model: chatgpt-plus-pro/gpt-5.3-codex
+updateArgs: {"reasoning_effort":"medium"}
+toolset: codex
 memoryBlocks: all
 mode: stateful
 ---
