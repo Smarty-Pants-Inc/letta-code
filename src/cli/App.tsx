@@ -1019,10 +1019,6 @@ export default function App({
   const [networkPhase, setNetworkPhase] = useState<
     "upload" | "download" | "error" | null
   >(null);
-  // Track permission mode changes for UI updates
-  const [uiPermissionMode, setUiPermissionMode] = useState(
-    permissionMode.getMode(),
-  );
   const statusLineTriggerVersionRef = useRef(0);
   const [statusLineTriggerVersion, setStatusLineTriggerVersion] = useState(0);
 
@@ -2126,7 +2122,7 @@ export default function App({
     totalOutputTokens: sessionStatsSnapshot.usage.completionTokens,
     contextWindowSize,
     usedContextTokens: contextTrackerRef.current.lastContextTokens,
-    permissionMode: uiPermissionMode,
+    permissionMode: permissionMode.getMode(),
     networkPhase,
     terminalWidth: columns,
     triggerVersion: statusLineTriggerVersion,
@@ -6852,6 +6848,14 @@ export default function App({
                 agentId,
                 ISOLATED_BLOCK_LABELS,
               );
+
+              // Back-compat: older flows may still reference the legacy label.
+              const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+                "../agent/memory"
+              );
+              await ensureIsolatedBlockLabels(client, agentId, [
+                LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+              ]);
             }
 
             const conversation = await client.conversations.create({
@@ -6945,6 +6949,14 @@ export default function App({
                 agentId,
                 ISOLATED_BLOCK_LABELS,
               );
+
+              // Back-compat: older flows may still reference the legacy label.
+              const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+                "../agent/memory"
+              );
+              await ensureIsolatedBlockLabels(client, agentId, [
+                LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+              ]);
             }
 
             const conversation = await client.conversations.create({
@@ -11865,6 +11877,24 @@ Plan file path: ${planFilePath}`;
                   try {
                     // Create a new conversation
                     const client = await getClient();
+
+                    // Letta requires isolated block labels to exist on the base agent.
+                    const { ensureIsolatedBlockLabels } = await import(
+                      "../agent/isolatedBlocks"
+                    );
+                    await ensureIsolatedBlockLabels(
+                      client,
+                      agentId,
+                      ISOLATED_BLOCK_LABELS,
+                    );
+
+                    // Back-compat: older flows may still reference the legacy label.
+                    const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } =
+                      await import("../agent/memory");
+                    await ensureIsolatedBlockLabels(client, agentId, [
+                      LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+                    ]);
+
                     const conversation = await client.conversations.create({
                       agent_id: agentId,
                       isolated_block_labels: [...ISOLATED_BLOCK_LABELS],

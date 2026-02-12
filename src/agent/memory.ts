@@ -40,9 +40,17 @@ export { READ_ONLY_BLOCK_LABELS };
  * Block labels that should be isolated per-conversation.
  * Note: skills/loaded_skills removed in LET-7353.
  */
-export const EPHEMERAL_CONTEXT_BLOCK_LABEL = "ephemeral_context" as const;
+// Conversation-scoped memory (per-conversation isolated blocks).
+//
+// Historically this label was called "ephemeral_context". That name is misleading:
+// it is persisted as a normal Block, just isolated per conversation.
+export const CONVERSATION_MEMORY_BLOCK_LABEL = "conversation_memory" as const;
 
-export const ISOLATED_BLOCK_LABELS = [EPHEMERAL_CONTEXT_BLOCK_LABEL] as const;
+// Back-compat for existing conversations/agents created before the rename.
+export const LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL =
+  "ephemeral_context" as const;
+
+export const ISOLATED_BLOCK_LABELS = [CONVERSATION_MEMORY_BLOCK_LABEL] as const;
 
 /**
  * Check if a block label is a project-level block

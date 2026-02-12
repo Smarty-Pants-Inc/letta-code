@@ -272,6 +272,7 @@ export type SdkToCliControlRequest =
   | { subtype: "initialize" }
   | { subtype: "interrupt" }
   | RegisterExternalToolsRequest
+  // NOTE: despite the name, this sets a conversation-scoped memory block (isolated per conversation).
   | { subtype: "set_ephemeral_context"; value: string };
 
 /**

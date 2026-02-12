@@ -1970,6 +1970,14 @@ async function main(): Promise<void> {
               agent.id,
               ISOLATED_BLOCK_LABELS,
             );
+
+            // Back-compat: older flows may still reference the legacy label.
+            const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+              "./agent/memory"
+            );
+            await ensureIsolatedBlockLabels(client, agent.id, [
+              LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+            ]);
           }
 
           const conversation = await client.conversations.create({
