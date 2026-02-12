@@ -12853,6 +12853,81 @@ ${SYSTEM_REMINDER_CLOSE}
     }
   }, [commandRunner, profileConfirmPending]);
 
+  // Track permission mode changes for UI updates
+  const [uiPermissionMode, setUiPermissionMode] = useState(
+    permissionMode.getMode(),
+  );
+
+  // Persist permission mode per conversation (e.g., keep YOLO on reconnect).
+  //
+  // Behavior:
+  // - When switching/resuming a conversation, restore the stored mode if present.
+  // - If no stored mode exists yet, store the current mode as the default for this
+  //   conversation (so "already in YOLO" persists even if the user never toggles).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only restore on conversation changes
+  useEffect(() => {
+    if (!agentId || !conversationId) return;
+    if (conversationId === "loading") return;
+
+    try {
+      const stored = settingsManager.getConversationPermissionMode(
+        agentId,
+        conversationId,
+      );
+
+      // Plan mode is temporary; never auto-restore into it.
+      const effective = stored === "plan" ? null : stored;
+
+      if (effective && effective !== uiPermissionMode) {
+        setUiPermissionMode(effective);
+        return;
+      }
+
+      if (!effective && uiPermissionMode !== "plan") {
+        settingsManager.setConversationPermissionMode(
+          agentId,
+          conversationId,
+          uiPermissionMode,
+        );
+      }
+    } catch {
+      // Best-effort only; if persistence fails, permission mode still works.
+    }
+  }, [agentId, conversationId]);
+
+  // Persist on changes.
+  useEffect(() => {
+    if (!agentId || !conversationId) return;
+    if (conversationId === "loading") return;
+    if (uiPermissionMode === "plan") return;
+
+    try {
+      settingsManager.setConversationPermissionMode(
+        agentId,
+        conversationId,
+        uiPermissionMode,
+      );
+    } catch {
+      // Best-effort only.
+    }
+  }, [agentId, conversationId, uiPermissionMode]);
+
+  // Keep the permissionMode singleton in sync with the UI state.
+  // This guards against any rare desync where the footer shows YOLO but
+  // permission checks still run in default mode.
+  useEffect(() => {
+    const singletonMode = permissionMode.getMode();
+    if (singletonMode === uiPermissionMode) return;
+
+    // If entering plan mode via UI state, ensure a plan file path is set.
+    if (uiPermissionMode === "plan" && !permissionMode.getPlanFilePath()) {
+      const planPath = generatePlanFilePath();
+      permissionMode.setPlanFilePath(planPath);
+    }
+
+    permissionMode.setMode(uiPermissionMode);
+  }, [uiPermissionMode]);
+
   // Handle ralph mode exit from Input component (shift+tab)
   const handleRalphExit = useCallback(() => {
     const ralph = ralphMode.getState();

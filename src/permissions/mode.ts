@@ -197,6 +197,13 @@ class PermissionModeManager {
   setMode(mode: PermissionMode): void {
     const prevMode = this.currentMode;
 
+    if (process.env.LETTA_DEBUG_PERMISSION_MODE === "1" && prevMode !== mode) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[debug:permissionMode] ${prevMode} -> ${mode}\n${new Error().stack ?? ""}`,
+      );
+    }
+
     // If we are entering plan mode, remember what mode we were previously in so
     // ExitPlanMode can restore it (e.g. YOLO).
     if (mode === "plan" && prevMode !== "plan") {
