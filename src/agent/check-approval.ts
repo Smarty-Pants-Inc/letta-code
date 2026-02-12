@@ -42,6 +42,10 @@ function isAnchorMessageType(messageType: string | undefined): boolean {
   return messageType === "user_message" || messageType === "assistant_message";
 }
 
+// Fetch more than we render so non-rendered tail events (e.g. usage/stop chunks)
+// don't push the last user-visible assistant message out of the backfill window.
+const BACKFILL_FETCH_LIMIT = 100;
+
 /**
  * Check if message backfilling is enabled via LETTA_BACKFILL env var.
  * Defaults to true. Set LETTA_BACKFILL=0 or LETTA_BACKFILL=false to disable.
