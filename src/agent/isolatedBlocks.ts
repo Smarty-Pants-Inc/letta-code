@@ -29,8 +29,18 @@ export async function ensureIsolatedBlockLabels(
     const block = await client.blocks.create({
       label,
       value: "",
-      description: "Conversation-scoped ephemeral context (auto-managed).",
+      description: "Conversation-scoped memory (auto-managed).",
     });
     await client.agents.blocks.attach(block.id, { agent_id: agentId });
   }
+}
+
+export async function ensureConversationMemoryBlock(
+  client: Letta,
+  agentId: string,
+): Promise<void> {
+  const { CONVERSATION_MEMORY_BLOCK_LABEL } = await import("./memory");
+  await ensureIsolatedBlockLabels(client, agentId, [
+    CONVERSATION_MEMORY_BLOCK_LABEL,
+  ]);
 }

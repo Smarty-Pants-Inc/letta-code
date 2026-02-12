@@ -8,7 +8,6 @@
  */
 
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   addToolCall,
