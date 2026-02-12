@@ -72,6 +72,11 @@ export interface Settings {
   // Server-indexed settings (agent IDs are server-specific)
   sessionsByServer?: Record<string, SessionRef>; // key = normalized base URL (e.g., "api.letta.com", "localhost:8283")
   pinnedAgentsByServer?: Record<string, string[]>; // DEPRECATED: use agents array
+
+  // Per-conversation prompt history for the interactive TUI (up/down arrows).
+  // Keyed by server, then by `${agentId}:${conversationId}`.
+  promptHistoryByServer?: Record<string, Record<string, string[]>>;
+
   // Unified agent settings array (replaces pinnedAgentsByServer)
   agents?: AgentSettings[];
   // Letta Cloud OAuth token management (stored separately in secrets)
@@ -1005,6 +1010,90 @@ class SettingsManager {
     }
     // Fall back to global
     return this.getGlobalLastAgentId();
+  }
+
+  // =====================================================================
+  // Prompt History (Interactive TUI)
+  // =====================================================================
+
+  private getPromptHistoryKey(agentId: string, conversationId: string): string {
+    return `${agentId}:${conversationId}`;
+  }
+
+  getPromptHistory(agentId: string, conversationId: string): string[] {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const byServer = settings.promptHistoryByServer?.[serverKey];
+    const history = byServer?.[key];
+    return Array.isArray(history) ? [...history] : [];
+  }
+
+  appendPromptHistory(
+    agentId: string,
+    conversationId: string,
+    entry: string,
+    maxEntries = 200,
+    maxConversations = 100,
+  ): void {
+    const normalized = entry.trimEnd();
+    if (!normalized.trim()) return;
+
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const promptHistoryByServer = { ...(settings.promptHistoryByServer || {}) };
+    const serverMap = { ...(promptHistoryByServer[serverKey] || {}) };
+    const prev = serverMap[key];
+    const history = Array.isArray(prev) ? [...prev] : [];
+
+    const last = history[history.length - 1];
+    if (typeof last === "string" && last.trimEnd() === normalized) {
+      return;
+    }
+
+    history.push(normalized);
+    const trimmed =
+      history.length > maxEntries ? history.slice(-maxEntries) : history;
+
+    serverMap[key] = trimmed;
+
+    // Prevent unbounded growth in number of conversations stored per server.
+    // Evict oldest keys first (object key order is insertion-ordered in modern JS runtimes).
+    const keys = Object.keys(serverMap);
+    const excess = keys.length - maxConversations;
+    if (excess > 0) {
+      let remaining = excess;
+      for (const k of keys) {
+        if (k === key) continue;
+        delete serverMap[k];
+        remaining -= 1;
+        if (remaining <= 0) break;
+      }
+    }
+
+    promptHistoryByServer[serverKey] = serverMap;
+
+    this.updateSettings({ promptHistoryByServer });
+  }
+
+  clearPromptHistory(agentId: string, conversationId: string): void {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const promptHistoryByServer = { ...(settings.promptHistoryByServer || {}) };
+    const serverMap = { ...(promptHistoryByServer[serverKey] || {}) };
+
+    if (!(key in serverMap)) {
+      return;
+    }
+
+    delete serverMap[key];
+    promptHistoryByServer[serverKey] = serverMap;
+    this.updateSettings({ promptHistoryByServer });
   }
 
   // =====================================================================
