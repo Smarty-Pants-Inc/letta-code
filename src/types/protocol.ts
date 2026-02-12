@@ -526,7 +526,8 @@ export type SdkToCliControlRequest =
   | RegisterExternalToolsRequest
   | BootstrapSessionStateRequest
   | RecoverPendingApprovalsControlRequest
-  | ListMessagesControlRequest;
+  | ListMessagesControlRequest
+  | { subtype: "set_ephemeral_context"; value: string };
 
 /**
  * Request to bootstrap session state (SDK → CLI).
