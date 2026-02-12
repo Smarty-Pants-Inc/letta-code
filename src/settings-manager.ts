@@ -90,6 +90,11 @@ export interface Settings {
 
   // Unified agent settings array (replaces pinnedAgentsByServer)
   agents?: AgentSettings[];
+
+  // Prompt history persistence (per agent+conversation, per server).
+  // Keyed by server, then by `${agentId}:${conversationId}`.
+  promptHistoryByServer?: Record<string, Record<string, string[]>>;
+
   // Letta Cloud OAuth token management (stored separately in secrets)
   refreshToken?: string; // DEPRECATED: kept for migration, now stored in secrets
   tokenExpiresAt?: number; // Unix timestamp in milliseconds
@@ -1114,6 +1119,57 @@ class SettingsManager {
     }
     // Fall back to global
     return this.getGlobalLastAgentId();
+  }
+
+  // =====================================================================
+  // Prompt History (Per Conversation)
+  // =====================================================================
+
+  private getPromptHistoryKey(agentId: string, conversationId: string): string {
+    return `${agentId}:${conversationId}`;
+  }
+
+  getPromptHistory(agentId: string, conversationId: string): string[] {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const byServer = settings.promptHistoryByServer?.[serverKey];
+    const history = byServer?.[key];
+    return Array.isArray(history)
+      ? history.filter((x) => typeof x === "string")
+      : [];
+  }
+
+  appendPromptHistory(
+    agentId: string,
+    conversationId: string,
+    entry: string,
+    maxEntries = 200,
+  ): void {
+    const trimmed = entry.trimEnd();
+    if (!trimmed.trim()) return;
+
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const promptHistoryByServer = {
+      ...(settings.promptHistoryByServer || {}),
+    };
+    const serverMap = { ...(promptHistoryByServer[serverKey] || {}) };
+
+    const prev = Array.isArray(serverMap[key]) ? serverMap[key] : [];
+    const last = prev[prev.length - 1];
+    if (typeof last === "string" && last.trimEnd() === trimmed) {
+      return;
+    }
+
+    const next = [...prev, trimmed];
+    serverMap[key] = next.length > maxEntries ? next.slice(-maxEntries) : next;
+
+    promptHistoryByServer[serverKey] = serverMap;
+    this.updateSettings({ promptHistoryByServer });
   }
 
   // =====================================================================

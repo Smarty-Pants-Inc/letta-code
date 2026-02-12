@@ -46,6 +46,7 @@ import { permissionMode } from "./permissions/mode";
 import { settingsManager } from "./settings-manager";
 import { startStartupAutoUpdateCheck } from "./startup-auto-update";
 import { telemetry } from "./telemetry";
+import { toolFilter } from "./tools/filter";
 import { loadTools } from "./tools/manager";
 import { markMilestone } from "./utils/timing";
 
@@ -524,6 +525,12 @@ async function main(): Promise<void> {
     fromAfFlagValue: values["from-af"],
   });
   const isHeadless = values.prompt || values.run || !process.stdin.isTTY;
+
+  // Apply tool filtering early so tool loading (headless or TUI) sees it.
+  // This is critical for Task-spawned subagents which use headless mode.
+  if (values.tools !== undefined) {
+    toolFilter.setEnabledTools(values.tools as string);
+  }
 
   // Fail if an unknown command/argument is passed (and we're not in headless mode where it might be a prompt)
   if (command && !isHeadless) {
