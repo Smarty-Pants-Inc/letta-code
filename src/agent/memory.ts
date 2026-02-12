@@ -40,7 +40,9 @@ export { READ_ONLY_BLOCK_LABELS };
  * Block labels that should be isolated per-conversation.
  * Note: skills/loaded_skills removed in LET-7353.
  */
-export const ISOLATED_BLOCK_LABELS = [] as const;
+export const EPHEMERAL_CONTEXT_BLOCK_LABEL = "ephemeral_context" as const;
+
+export const ISOLATED_BLOCK_LABELS = [EPHEMERAL_CONTEXT_BLOCK_LABEL] as const;
 
 /**
  * Check if a block label is a project-level block

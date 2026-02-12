@@ -270,7 +270,8 @@ export interface ControlRequest {
 export type SdkToCliControlRequest =
   | { subtype: "initialize" }
   | { subtype: "interrupt" }
-  | RegisterExternalToolsRequest;
+  | RegisterExternalToolsRequest
+  | { subtype: "set_ephemeral_context"; value: string };
 
 /**
  * Request to register external tools (SDK → CLI)
