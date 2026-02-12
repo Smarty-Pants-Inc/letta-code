@@ -925,6 +925,75 @@ export function Input({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [temporaryInput, setTemporaryInput] = useState("");
 
+  // Load persisted history per agent+conversation.
+  useEffect(() => {
+    if (!agentId || !conversationId) {
+      // If ids are temporarily unavailable during a switch, clear any old history
+      // so we don't show the wrong conversation's prompts.
+      setHistory([]);
+      setHistoryIndex(-1);
+      setTemporaryInput("");
+      setAtStartBoundary(false);
+      setAtEndBoundary(false);
+      setPreferredColumn(null);
+      return;
+    }
+
+    try {
+      const persisted = settingsManager.getPromptHistory(
+        agentId,
+        conversationId,
+      );
+      setHistory(persisted);
+      setHistoryIndex(-1);
+      setTemporaryInput("");
+      setAtStartBoundary(false);
+      setAtEndBoundary(false);
+      setPreferredColumn(null);
+    } catch {
+      // If settings aren't loaded yet, fall back to empty history.
+      setHistory([]);
+      setHistoryIndex(-1);
+      setTemporaryInput("");
+      setAtStartBoundary(false);
+      setAtEndBoundary(false);
+      setPreferredColumn(null);
+    }
+  }, [agentId, conversationId]);
+
+  const appendHistoryEntry = (
+    entry: string,
+    opts?: {
+      persist?: boolean;
+    },
+  ) => {
+    const normalized = entry.trimEnd();
+    setHistory((prev) => {
+      if (!normalized.trim()) return prev;
+      const last = prev[prev.length - 1];
+      if (typeof last === "string" && last.trimEnd() === normalized)
+        return prev;
+      const next = [...prev, normalized];
+      return next.length > 200 ? next.slice(-200) : next;
+    });
+
+    if (opts?.persist === false) {
+      return;
+    }
+
+    if (agentId && conversationId) {
+      try {
+        settingsManager.appendPromptHistory(
+          agentId,
+          conversationId,
+          normalized,
+        );
+      } catch {
+        // ignore persistence failures
+      }
+    }
+  };
+
   // Track if we just moved to a boundary (for two-step history navigation)
   const [atStartBoundary, setAtStartBoundary] = useState(false);
   const [atEndBoundary, setAtEndBoundary] = useState(false);
@@ -1355,10 +1424,7 @@ export function Input({
       if (bashRunning) return;
 
       // Add to history if not empty and not a duplicate of the last entry
-      setHistory((prev) => {
-        if (previousValue.trim() === prev[prev.length - 1]) return prev;
-        return [...prev, previousValue];
-      });
+      appendHistoryEntry(previousValue, { persist: true });
 
       // Reset history navigation
       setHistoryIndex(-1);
@@ -1372,13 +1438,8 @@ export function Input({
       return;
     }
 
-    // Add to history if not empty and not a duplicate of the last entry
-    if (previousValue.trim()) {
-      setHistory((prev) => {
-        if (previousValue === prev[prev.length - 1]) return prev;
-        return [...prev, previousValue];
-      });
-    }
+    // Add to history immediately for UX, but only persist if the message is actually submitted.
+    appendHistoryEntry(previousValue, { persist: false });
 
     // Reset history navigation
     setHistoryIndex(-1);
@@ -1386,8 +1447,22 @@ export function Input({
 
     setValue(""); // Clear immediately for responsiveness
     const result = await onSubmit(previousValue);
-    // If message was NOT submitted (e.g. pending approval), restore it
-    if (!result.submitted) {
+
+    if (result.submitted) {
+      // Persist only on success (avoid storing drafts that never left the client).
+      if (agentId && conversationId) {
+        try {
+          settingsManager.appendPromptHistory(
+            agentId,
+            conversationId,
+            previousValue.trimEnd(),
+          );
+        } catch {
+          // ignore persistence failures
+        }
+      }
+    } else {
+      // If message was NOT submitted (e.g. pending approval), restore it
       setValue(previousValue);
     }
   }, [
@@ -1439,12 +1514,7 @@ export function Input({
       const commandToSubmit = selectedCommand.trim();
 
       // Add to history if not a duplicate of the last entry
-      if (commandToSubmit) {
-        setHistory((prev) => {
-          if (commandToSubmit === prev[prev.length - 1]) return prev;
-          return [...prev, commandToSubmit];
-        });
-      }
+      appendHistoryEntry(commandToSubmit, { persist: true });
 
       // Reset history navigation
       setHistoryIndex(-1);
