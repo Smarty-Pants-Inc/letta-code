@@ -121,7 +121,14 @@ export interface LocalProjectSettings {
   // Server-indexed settings (agent IDs are server-specific)
   sessionsByServer?: Record<string, SessionRef>; // key = normalized base URL
   pinnedAgentsByServer?: Record<string, string[]>; // key = normalized base URL
-  listenerEnvName?: string; // Saved environment name for listener connections (project-specific)
+
+  // Saved environment name for listener connections (project-specific)
+  listenerEnvName?: string;
+
+  // Conversation follow cursors for LETTA_CODE_FOLLOW_POLL_MS.
+  // Stored per server and per (agentId, conversationId) so reconnect can replay everything
+  // since the last seen message.
+  followCursorsByServer?: Record<string, Record<string, string>>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
