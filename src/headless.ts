@@ -28,7 +28,11 @@ import { buildClientSkillsPayload } from "./agent/clientSkills";
 import { setAgentContext, setConversationId } from "./agent/context";
 import { createAgent } from "./agent/create";
 import { handleListMessages } from "./agent/listMessagesHandler";
-import { ISOLATED_BLOCK_LABELS } from "./agent/memory";
+import {
+  CONVERSATION_MEMORY_BLOCK_LABEL,
+  ISOLATED_BLOCK_LABELS,
+  LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+} from "./agent/memory";
 import { getStreamToolContextId, sendMessageStream } from "./agent/message";
 import {
   getModelPresetUpdateForAgent,
@@ -1084,6 +1088,19 @@ export async function handleHeadlessCommand(
     }
   } else if (forceNewConversation) {
     // --new flag: create a new conversation (for concurrent sessions)
+    {
+      // Letta requires isolated block labels to exist on the base agent.
+      const { ensureIsolatedBlockLabels } = await import(
+        "./agent/isolatedBlocks"
+      );
+      await ensureIsolatedBlockLabels(client, agent.id, isolatedBlockLabels);
+
+      // Back-compat: older flows may still reference the legacy label.
+      await ensureIsolatedBlockLabels(client, agent.id, [
+        LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+      ]);
+    }
+
     const conversation = await client.conversations.create({
       agent_id: agent.id,
       isolated_block_labels: isolatedBlockLabels,
@@ -3188,7 +3205,7 @@ async function runBidirectionalMode(
             response: {
               subtype: "error",
               request_id: requestId ?? "",
-              error: "ephemeral context requires a non-default conversation",
+              error: "conversation memory requires a non-default conversation",
             },
             session_id: sessionId,
             uuid: randomUUID(),
@@ -3207,6 +3224,9 @@ async function runBidirectionalMode(
                 await client.conversations.retrieve(conversationId);
               const isolatedIds = conversation.isolated_block_ids || [];
 
+              // Resolve the isolated block ID for conversation-scoped memory.
+              // Historically the label was "ephemeral_context".
+              // Do concurrent lookups to avoid sequential latency.
               const results = await Promise.allSettled(
                 isolatedIds.map(async (id: string) => {
                   const blk = await client.blocks.retrieve(id);
@@ -3215,9 +3235,10 @@ async function runBidirectionalMode(
               );
 
               for (const r of results) {
+                if (r.status !== "fulfilled") continue;
                 if (
-                  r.status === "fulfilled" &&
-                  r.value.label === "ephemeral_context"
+                  r.value.label === CONVERSATION_MEMORY_BLOCK_LABEL ||
+                  r.value.label === LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL
                 ) {
                   blockId = r.value.id;
                   break;
@@ -3225,7 +3246,9 @@ async function runBidirectionalMode(
               }
 
               if (!blockId) {
-                throw new Error("isolated block 'ephemeral_context' not found");
+                throw new Error(
+                  "isolated block for conversation memory not found",
+                );
               }
 
               ephemeralContextBlockIdCache.set(conversationId, blockId);

@@ -1871,6 +1871,26 @@ async function main(): Promise<void> {
           }
         } else if (forceNewConversation) {
           // --new flag: create a new conversation (for concurrent sessions)
+          {
+            // Letta requires isolated block labels to exist on the base agent.
+            const { ensureIsolatedBlockLabels } = await import(
+              "./agent/isolatedBlocks"
+            );
+            await ensureIsolatedBlockLabels(
+              client,
+              agent.id,
+              ISOLATED_BLOCK_LABELS,
+            );
+
+            // Back-compat: older flows may still reference the legacy label.
+            const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+              "./agent/memory"
+            );
+            await ensureIsolatedBlockLabels(client, agent.id, [
+              LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+            ]);
+          }
+
           const conversation = await client.conversations.create({
             agent_id: agent.id,
             isolated_block_labels: [...ISOLATED_BLOCK_LABELS],

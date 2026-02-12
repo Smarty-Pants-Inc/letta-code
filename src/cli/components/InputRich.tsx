@@ -961,38 +961,41 @@ export function Input({
     }
   }, [agentId, conversationId]);
 
-  const appendHistoryEntry = (
-    entry: string,
-    opts?: {
-      persist?: boolean;
-    },
-  ) => {
-    const normalized = entry.trimEnd();
-    setHistory((prev) => {
-      if (!normalized.trim()) return prev;
-      const last = prev[prev.length - 1];
-      if (typeof last === "string" && last.trimEnd() === normalized)
-        return prev;
-      const next = [...prev, normalized];
-      return next.length > 200 ? next.slice(-200) : next;
-    });
+  const appendHistoryEntry = useCallback(
+    (
+      entry: string,
+      opts?: {
+        persist?: boolean;
+      },
+    ) => {
+      const normalized = entry.trimEnd();
+      setHistory((prev) => {
+        if (!normalized.trim()) return prev;
+        const last = prev[prev.length - 1];
+        if (typeof last === "string" && last.trimEnd() === normalized)
+          return prev;
+        const next = [...prev, normalized];
+        return next.length > 200 ? next.slice(-200) : next;
+      });
 
-    if (opts?.persist === false) {
-      return;
-    }
-
-    if (agentId && conversationId) {
-      try {
-        settingsManager.appendPromptHistory(
-          agentId,
-          conversationId,
-          normalized,
-        );
-      } catch {
-        // ignore persistence failures
+      if (opts?.persist === false) {
+        return;
       }
-    }
-  };
+
+      if (agentId && conversationId) {
+        try {
+          settingsManager.appendPromptHistory(
+            agentId,
+            conversationId,
+            normalized,
+          );
+        } catch {
+          // ignore persistence failures
+        }
+      }
+    },
+    [agentId, conversationId],
+  );
 
   // Track if we just moved to a boundary (for two-step history navigation)
   const [atStartBoundary, setAtStartBoundary] = useState(false);
@@ -1479,6 +1482,9 @@ export function Input({
     bashRunning,
     onBashSubmit,
     onSubmit,
+    appendHistoryEntry,
+    agentId,
+    conversationId,
   ]);
 
   // Handle file selection from autocomplete
@@ -1530,7 +1536,7 @@ export function Input({
       setValue(""); // Clear immediately for responsiveness
       await onSubmit(commandToSubmit);
     },
-    [onSubmit],
+    [onSubmit, appendHistoryEntry],
   );
 
   // Handle slash command autocomplete (Tab key - fill text only)

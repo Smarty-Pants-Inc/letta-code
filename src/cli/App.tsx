@@ -8718,6 +8718,26 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
             const client = await getClient();
 
             // Create a new conversation for the current agent
+            {
+              // Letta requires isolated block labels to exist on the base agent.
+              const { ensureIsolatedBlockLabels } = await import(
+                "../agent/isolatedBlocks"
+              );
+              await ensureIsolatedBlockLabels(
+                client,
+                agentId,
+                ISOLATED_BLOCK_LABELS,
+              );
+
+              // Back-compat: older flows may still reference the legacy label.
+              const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+                "../agent/memory"
+              );
+              await ensureIsolatedBlockLabels(client, agentId, [
+                LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+              ]);
+            }
+
             const conversation = await client.conversations.create({
               agent_id: agentId,
               isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
@@ -8812,7 +8832,26 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
               });
             }
 
-            // Create a new conversation
+            // Create a new conversation.
+            {
+              // Letta requires isolated block labels to exist on the base agent.
+              const { ensureIsolatedBlockLabels } = await import(
+                "../agent/isolatedBlocks"
+              );
+              await ensureIsolatedBlockLabels(
+                client,
+                agentId,
+                ISOLATED_BLOCK_LABELS,
+              );
+
+              // Back-compat: older flows may still reference the legacy label.
+              const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } = await import(
+                "../agent/memory"
+              );
+              await ensureIsolatedBlockLabels(client, agentId, [
+                LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+              ]);
+            }
             const conversation = await client.conversations.create({
               agent_id: agentId,
               isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
@@ -14767,6 +14806,24 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                   try {
                     // Create a new conversation
                     const client = await getClient();
+
+                    // Letta requires isolated block labels to exist on the base agent.
+                    const { ensureIsolatedBlockLabels } = await import(
+                      "../agent/isolatedBlocks"
+                    );
+                    await ensureIsolatedBlockLabels(
+                      client,
+                      agentId,
+                      ISOLATED_BLOCK_LABELS,
+                    );
+
+                    // Back-compat: older flows may still reference the legacy label.
+                    const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } =
+                      await import("../agent/memory");
+                    await ensureIsolatedBlockLabels(client, agentId, [
+                      LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+                    ]);
+
                     const conversation = await client.conversations.create({
                       agent_id: agentId,
                       isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
