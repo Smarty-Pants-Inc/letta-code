@@ -2470,6 +2470,10 @@ async function runBidirectionalMode(
     }
   };
 
+  // Cache isolated block IDs per conversation for headless control requests.
+  // (Avoids repeated N+1 blocks.retrieve calls.)
+  const ephemeralContextBlockIdCache = new Map<string, string>();
+
   // Create readline interface for stdin
   const rl = readline.createInterface({
     input: process.stdin,
@@ -2935,6 +2939,116 @@ async function runBidirectionalMode(
           client,
         });
         console.log(JSON.stringify(listResp));
+      } else if (subtype === "set_ephemeral_context") {
+        const request = message.request as Record<string, unknown> | undefined;
+
+        if (typeof request?.value !== "string") {
+          const resp: ControlResponse = {
+            type: "control_response",
+            response: {
+              subtype: "error",
+              request_id: requestId ?? "",
+              error:
+                "set_ephemeral_context requires a string field: request.value",
+            },
+            session_id: sessionId,
+            uuid: randomUUID(),
+          };
+          console.log(JSON.stringify(resp));
+          continue;
+        }
+
+        const value = request.value;
+
+        // Isolated blocks are only available on non-default conversations.
+        if (!conversationId || conversationId === "default") {
+          const resp: ControlResponse = {
+            type: "control_response",
+            response: {
+              subtype: "error",
+              request_id: requestId ?? "",
+              error: "ephemeral context requires a non-default conversation",
+            },
+            session_id: sessionId,
+            uuid: randomUUID(),
+          };
+          console.log(JSON.stringify(resp));
+          continue;
+        }
+
+        try {
+          let blockId: string | undefined =
+            ephemeralContextBlockIdCache.get(conversationId);
+
+          for (let attempt = 0; attempt < 2; attempt++) {
+            if (!blockId) {
+              const conversation =
+                await client.conversations.retrieve(conversationId);
+              const isolatedIds = conversation.isolated_block_ids || [];
+
+              // Resolve the isolated block ID for label "ephemeral_context".
+              // Do concurrent lookups to avoid sequential latency.
+              const results = await Promise.allSettled(
+                isolatedIds.map(async (id: string) => {
+                  const blk = await client.blocks.retrieve(id);
+                  return { id, label: blk.label };
+                }),
+              );
+
+              for (const r of results) {
+                if (
+                  r.status === "fulfilled" &&
+                  r.value.label === "ephemeral_context"
+                ) {
+                  blockId = r.value.id;
+                  break;
+                }
+              }
+
+              if (!blockId) {
+                throw new Error("isolated block 'ephemeral_context' not found");
+              }
+
+              ephemeralContextBlockIdCache.set(conversationId, blockId);
+            }
+
+            try {
+              await client.blocks.update(blockId, { value });
+              break;
+            } catch (e) {
+              // If the cached id went stale, clear and retry once.
+              ephemeralContextBlockIdCache.delete(conversationId);
+              blockId = undefined;
+              if (attempt >= 1) {
+                throw e;
+              }
+            }
+          }
+
+          const resp: ControlResponse = {
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: requestId ?? "",
+              response: { ok: true, block_id: blockId },
+            },
+            session_id: sessionId,
+            uuid: randomUUID(),
+          };
+          console.log(JSON.stringify(resp));
+        } catch (err) {
+          const resp: ControlResponse = {
+            type: "control_response",
+            response: {
+              subtype: "error",
+              request_id: requestId ?? "",
+              error: err instanceof Error ? err.message : String(err),
+            },
+            session_id: sessionId,
+            uuid: randomUUID(),
+          };
+          console.log(JSON.stringify(resp));
+        }
       } else {
         const errorResponse: ControlResponse = {
           type: "control_response",

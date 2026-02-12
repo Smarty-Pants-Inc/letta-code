@@ -741,7 +741,9 @@ async function executeSubagent(
       }
 
       const propagatedError = state.finalError?.trim();
-      const fallbackError = stderr || `Subagent exited with code ${exitCode}`;
+      const spawnErrorMessage = spawnError ? getErrorMessage(spawnError) : "";
+      const fallbackError =
+        stderr || spawnErrorMessage || `Subagent exited with code ${exitCode}`;
 
       return {
         agentId: state.agentId || "",

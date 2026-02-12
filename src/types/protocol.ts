@@ -430,7 +430,8 @@ export type SdkToCliControlRequest =
   | { subtype: "interrupt" }
   | RegisterExternalToolsRequest
   | BootstrapSessionStateRequest
-  | ListMessagesControlRequest;
+  | ListMessagesControlRequest
+  | { subtype: "set_ephemeral_context"; value: string };
 
 /**
  * Request to bootstrap session state (SDK → CLI).
