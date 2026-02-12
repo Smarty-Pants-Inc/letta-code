@@ -10,11 +10,18 @@ describe("subagent max_steps error propagation", () => {
     const source = readFileSync(managerPath, "utf-8");
 
     expect(source).toContain(
-      "const propagatedError = state.finalError?.trim();",
+      'const spawnErrorMessage = spawnError ? getErrorMessage(spawnError) : "";',
+    );
+    // Avoid `${...}` linting in a single string literal.
+    expect(source).toContain(
+      "stderr || spawnErrorMessage || `Subagent exited with code " +
+        "${" +
+        "exitCode" +
+        "}" +
+        "`",
     );
     expect(source).toContain(
-      `const fallbackError = stderr || \`Subagent exited with code \${exitCode}\`;`,
+      "error: state.finalError?.trim() || fallbackError",
     );
-    expect(source).toContain("error: propagatedError || fallbackError");
   });
 });
