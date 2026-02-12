@@ -306,6 +306,10 @@ export async function handleHeadlessCommand(
       "from-af": { type: "string" },
       tags: { type: "string" },
 
+      // Subagent-only helper: resolve a built-in subagent by name and append its
+      // system prompt to a codex-optimized base prompt.
+      subagent: { type: "string" },
+
       memfs: { type: "boolean" },
       "no-memfs": { type: "boolean" },
       "no-skills": { type: "boolean" },
@@ -315,10 +319,36 @@ export async function handleHeadlessCommand(
       "reflection-behavior": { type: "string" },
       "reflection-step-count": { type: "string" },
       "max-turns": { type: "string" }, // Maximum number of agentic turns
+      "update-args": { type: "string" }, // JSON updateArgs for model settings
     },
     strict: false,
     allowPositionals: true,
   });
+
+  // If subagent preset is provided, set system prompt appropriately.
+  // This avoids needing to pass the full subagent prompt body via argv.
+  const subagentPreset = values.subagent as string | undefined;
+  if (subagentPreset) {
+    try {
+      const basePreset = "letta-codex";
+      const systemAppend =
+        (values["system-append"] as string | undefined) || "";
+      const { getAllSubagentConfigs } = await import("./agent/subagents");
+      const configs = await getAllSubagentConfigs(process.cwd());
+      const cfg = configs[subagentPreset];
+      const subagentBody = cfg?.systemPrompt || "";
+      values.system = basePreset;
+      values["system-append"] = [
+        systemAppend,
+        `\n\n# Subagent: ${subagentPreset}\n\n`,
+        subagentBody,
+      ]
+        .filter((s) => typeof s === "string" && s.length > 0)
+        .join("");
+    } catch {
+      // Best-effort; fall back to whatever caller passed.
+    }
+  }
 
   // Set tool filter if provided (controls which tools are loaded)
   if (values.tools !== undefined) {
@@ -818,7 +848,20 @@ export async function handleHeadlessCommand(
 
   // Priority 3: Check if --new flag was passed (skip all resume logic)
   if (!agent && forceNew) {
-    const updateArgs = getModelUpdateArgs(model);
+    let updateArgs = getModelUpdateArgs(model);
+
+    // Allow callers (subagents) to override model update args from the CLI.
+    // Format: --update-args '{"reasoning_effort":"low"}'
+    const updateArgsRaw = values["update-args"] as string | undefined;
+    if (updateArgsRaw) {
+      try {
+        const overrides = JSON.parse(updateArgsRaw) as Record<string, unknown>;
+        updateArgs = { ...(updateArgs ?? {}), ...overrides };
+      } catch {
+        // Ignore malformed JSON and fall back to model defaults
+      }
+    }
+
     const createOptions = {
       model,
       embeddingModel,

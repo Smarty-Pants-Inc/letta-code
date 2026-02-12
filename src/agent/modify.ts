@@ -27,6 +27,7 @@ function buildModelSettings(
   updateArgs?: Record<string, unknown>,
 ): ModelSettings {
   // Include our custom ChatGPT OAuth provider (chatgpt-plus-pro)
+  const isChatGPTOAuth = modelHandle.startsWith("chatgpt-plus-pro/");
   const isOpenAI =
     modelHandle.startsWith("openai/") ||
     modelHandle.startsWith(`${OPENAI_CODEX_PROVIDER_NAME}/`);
@@ -42,7 +43,24 @@ function buildModelSettings(
 
   let settings: ModelSettings;
 
-  if (isOpenAI || isOpenRouter) {
+  if (isChatGPTOAuth) {
+    // chatgpt_oauth provider (Codex account connection)
+    const chatgptSettings: Record<string, unknown> = {
+      provider_type: "chatgpt_oauth",
+      parallel_tool_calls: true,
+    };
+    if (updateArgs?.reasoning_effort) {
+      chatgptSettings.reasoning = {
+        reasoning_effort: updateArgs.reasoning_effort as
+          | "none"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh",
+      };
+    }
+    settings = chatgptSettings;
+  } else if (isOpenAI || isOpenRouter) {
     const openaiSettings: OpenAIModelSettings = {
       provider_type: "openai",
       parallel_tool_calls: true,
@@ -54,7 +72,8 @@ function buildModelSettings(
           | "minimal"
           | "low"
           | "medium"
-          | "high",
+          | "high"
+          | "xhigh",
       };
     }
     settings = openaiSettings;

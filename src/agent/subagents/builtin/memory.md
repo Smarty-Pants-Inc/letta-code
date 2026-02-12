@@ -1,8 +1,10 @@
 ---
 name: memory
 description: Restructure memory blocks into focused, scannable, hierarchically-named blocks (use `/` naming)
-tools: Read, Edit, Write, Glob, Grep, Bash, conversation_search
-model: opus
+tools: ReadFile, ListDir, GrepFiles, Shell, ShellCommand, ApplyPatch, Write, Edit
+model: chatgpt-plus-pro/gpt-5.3-codex
+updateArgs: {"reasoning_effort":"high"}
+toolset: codex
 memoryBlocks: none
 mode: stateless
 permissionMode: bypassPermissions
