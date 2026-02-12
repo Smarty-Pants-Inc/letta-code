@@ -1960,6 +1960,18 @@ async function main(): Promise<void> {
           }
         } else if (forceNewConversation) {
           // --new flag: create a new conversation (for concurrent sessions)
+          {
+            // Letta requires isolated block labels to exist on the base agent.
+            const { ensureIsolatedBlockLabels } = await import(
+              "./agent/isolatedBlocks"
+            );
+            await ensureIsolatedBlockLabels(
+              client,
+              agent.id,
+              ISOLATED_BLOCK_LABELS,
+            );
+          }
+
           const conversation = await client.conversations.create({
             agent_id: agent.id,
             isolated_block_labels: [...ISOLATED_BLOCK_LABELS],

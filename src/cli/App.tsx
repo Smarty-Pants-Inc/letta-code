@@ -6842,6 +6842,18 @@ export default function App({
             const client = await getClient();
 
             // Create a new conversation for the current agent
+            {
+              // Letta requires isolated block labels to exist on the base agent.
+              const { ensureIsolatedBlockLabels } = await import(
+                "../agent/isolatedBlocks"
+              );
+              await ensureIsolatedBlockLabels(
+                client,
+                agentId,
+                ISOLATED_BLOCK_LABELS,
+              );
+            }
+
             const conversation = await client.conversations.create({
               agent_id: agentId,
               isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
@@ -6923,6 +6935,18 @@ export default function App({
             });
 
             // Also create a new conversation since messages were cleared
+            {
+              // Letta requires isolated block labels to exist on the base agent.
+              const { ensureIsolatedBlockLabels } = await import(
+                "../agent/isolatedBlocks"
+              );
+              await ensureIsolatedBlockLabels(
+                client,
+                agentId,
+                ISOLATED_BLOCK_LABELS,
+              );
+            }
+
             const conversation = await client.conversations.create({
               agent_id: agentId,
               isolated_block_labels: [...ISOLATED_BLOCK_LABELS],

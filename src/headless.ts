@@ -1085,6 +1085,14 @@ export async function handleHeadlessCommand(
     }
   } else if (forceNewConversation) {
     // --new flag: create a new conversation (for concurrent sessions)
+    {
+      // Letta requires isolated block labels to exist on the base agent.
+      const { ensureIsolatedBlockLabels } = await import(
+        "./agent/isolatedBlocks"
+      );
+      await ensureIsolatedBlockLabels(client, agent.id, isolatedBlockLabels);
+    }
+
     const conversation = await client.conversations.create({
       agent_id: agent.id,
       isolated_block_labels: isolatedBlockLabels,
