@@ -790,7 +790,20 @@ export async function handleHeadlessCommand(
 
   // Priority 3: Check if --new flag was passed (skip all resume logic)
   if (!agent && forceNew) {
-    const updateArgs = getModelUpdateArgs(model);
+    let updateArgs = getModelUpdateArgs(model);
+
+    // Allow callers (subagents) to override model update args from the CLI.
+    // Format: --update-args '{"reasoning_effort":"low"}'
+    const updateArgsRaw = values["update-args"] as string | undefined;
+    if (updateArgsRaw) {
+      try {
+        const overrides = JSON.parse(updateArgsRaw) as Record<string, unknown>;
+        updateArgs = { ...(updateArgs ?? {}), ...overrides };
+      } catch {
+        // Ignore malformed JSON and fall back to model defaults
+      }
+    }
+
     const createOptions = {
       model,
       embeddingModel,

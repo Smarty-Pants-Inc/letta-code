@@ -8,6 +8,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   addToolCall,
@@ -22,7 +23,6 @@ import { cliPermissions } from "../../permissions/cli";
 import { permissionMode } from "../../permissions/mode";
 import { sessionPermissions } from "../../permissions/session";
 import { settingsManager } from "../../settings-manager";
-import { resolveLettaInvocation } from "../../tools/impl/shellEnv";
 
 import { getErrorMessage } from "../../utils/error";
 import { getAvailableModelHandles } from "../available-models";
@@ -419,66 +419,6 @@ function parseResultFromStdout(
   }
 }
 
-interface ResolveSubagentLauncherOptions {
-  env?: NodeJS.ProcessEnv;
-  argv?: string[];
-  execPath?: string;
-  platform?: NodeJS.Platform;
-}
-
-interface SubagentLauncher {
-  command: string;
-  args: string[];
-}
-
-export function resolveSubagentLauncher(
-  cliArgs: string[],
-  options: ResolveSubagentLauncherOptions = {},
-): SubagentLauncher {
-  const env = options.env ?? process.env;
-  const argv = options.argv ?? process.argv;
-  const execPath = options.execPath ?? process.execPath;
-  const platform = options.platform ?? process.platform;
-
-  const invocation = resolveLettaInvocation(env, argv, execPath);
-  if (invocation) {
-    return {
-      command: invocation.command,
-      args: [...invocation.args, ...cliArgs],
-    };
-  }
-
-  const currentScript = argv[1] || "";
-
-  // Preserve historical subagent behavior: any .ts entrypoint uses runtime binary.
-  if (currentScript.endsWith(".ts")) {
-    return {
-      command: execPath,
-      args: [currentScript, ...cliArgs],
-    };
-  }
-
-  // Windows cannot reliably spawn bundled .js directly (EFTYPE/EINVAL).
-  if (currentScript.endsWith(".js") && platform === "win32") {
-    return {
-      command: execPath,
-      args: [currentScript, ...cliArgs],
-    };
-  }
-
-  if (currentScript.endsWith(".js")) {
-    return {
-      command: currentScript,
-      args: cliArgs,
-    };
-  }
-
-  return {
-    command: "letta",
-    args: cliArgs,
-  };
-}
-
 // ============================================================================
 // Core Functions
 // ============================================================================
@@ -513,10 +453,20 @@ function buildSubagentArgs(
     // Don't pass --system (existing agent keeps its prompt)
     // Don't pass --model (existing agent keeps its model)
   } else {
-    // Create new agent (original behavior)
-    args.push("--new-agent", "--system", type);
+    // Create new agent
+    // Use Codex-optimized base system prompt, then append the subagent-specific
+    // instructions from its definition.
+    args.push("--new-agent", "--system", "letta-codex");
     if (model) {
       args.push("--model", model);
+    }
+    args.push("--toolset", config.toolset || "codex");
+    args.push(
+      "--system-append",
+      `\n\n# Subagent: ${type}\n\n${config.systemPrompt}\n`,
+    );
+    if (config.updateArgs && Object.keys(config.updateArgs).length > 0) {
+      args.push("--update-args", JSON.stringify(config.updateArgs));
     }
   }
 
@@ -628,7 +578,39 @@ async function executeSubagent(
       maxTurns,
     );
 
-    const launcher = resolveSubagentLauncher(cliArgs);
+    const currentScript = process.argv[1] || "";
+
+    // Spawn Letta Code in headless mode.
+    // Prefer using the same entrypoint/runtime as the current process:
+    // 1. LETTA_CODE_BIN env var (explicit override; should be an executable)
+    // 2. Current process argv[1] if it's a .js file (built letta.js)
+    // 3. If running from source (src/index.ts), respawn via the current runtime
+    //    (e.g. bun) and pass the script path explicitly.
+    // 4. "letta" (global install)
+    let lettaCmd = process.env.LETTA_CODE_BIN || "";
+    const lettaCmdArgsPrefix: string[] = [];
+
+    if (!lettaCmd) {
+      if (currentScript.endsWith(".js")) {
+        lettaCmd = currentScript;
+      } else if (currentScript.includes("src/index.ts")) {
+        // When running from source (via Bun), we must respawn via Bun and include the
+        // same loader flags used by our wrapper; otherwise Bun will try to parse
+        // imported markdown prompt assets as JS and crash immediately.
+        //
+        // This also fixes a common failure mode where previous logic tried to spawn
+        // `./letta.js` relative to the user's cwd (often missing).
+        lettaCmd = process.argv[0] || "bun";
+        lettaCmdArgsPrefix.push(
+          "--loader=.md:text",
+          "--loader=.mdx:text",
+          "--loader=.txt:text",
+          currentScript,
+        );
+      } else {
+        lettaCmd = "letta";
+      }
+    }
     // Pass parent agent ID so subagents can access parent's context (e.g., search history)
     let parentAgentId: string | undefined;
     try {
@@ -645,7 +627,7 @@ async function executeSubagent(
     const inheritedBaseUrl =
       process.env.LETTA_BASE_URL || settings.env?.LETTA_BASE_URL;
 
-    const proc = spawn(launcher.command, launcher.args, {
+    const proc = spawn(lettaCmd, [...lettaCmdArgsPrefix, ...cliArgs], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -740,7 +722,6 @@ async function executeSubagent(
         }
       }
 
-      const propagatedError = state.finalError?.trim();
       const spawnErrorMessage = spawnError ? getErrorMessage(spawnError) : "";
       const fallbackError =
         stderr || spawnErrorMessage || `Subagent exited with code ${exitCode}`;
@@ -750,7 +731,7 @@ async function executeSubagent(
         conversationId: state.conversationId || undefined,
         report: "",
         success: false,
-        error: propagatedError || fallbackError,
+        error: state.finalError?.trim() || fallbackError,
       };
     }
 
