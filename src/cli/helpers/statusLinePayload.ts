@@ -16,6 +16,8 @@ export interface StatusLinePayloadBuildInput {
   permissionMode?: string;
   networkPhase?: "upload" | "download" | "error" | null;
   terminalWidth?: number;
+  systemPromptId?: string | null;
+  toolset?: string | null;
 }
 
 /**
@@ -69,6 +71,8 @@ export interface StatusLinePayload {
   permission_mode: string | null;
   network_phase: "upload" | "download" | "error" | null;
   terminal_width: number | null;
+  system_prompt_id: string | null;
+  toolset: string | null;
 }
 
 export function calculateContextPercentages(
@@ -152,5 +156,7 @@ export function buildStatusLinePayload(
     permission_mode: input.permissionMode ?? null,
     network_phase: input.networkPhase ?? null,
     terminal_width: input.terminalWidth ?? null,
+    system_prompt_id: input.systemPromptId ?? null,
+    toolset: input.toolset ?? null,
   };
 }

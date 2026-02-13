@@ -2125,6 +2125,8 @@ export default function App({
     permissionMode: permissionMode.getMode(),
     networkPhase,
     terminalWidth: columns,
+    systemPromptId: currentSystemPromptId,
+    toolset: currentToolset,
     triggerVersion: statusLineTriggerVersion,
   });
 
