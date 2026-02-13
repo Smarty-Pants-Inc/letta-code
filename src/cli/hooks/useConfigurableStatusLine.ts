@@ -37,6 +37,8 @@ export interface StatusLineInputs {
   permissionMode?: string;
   networkPhase?: "upload" | "download" | "error" | null;
   terminalWidth?: number;
+  systemPromptId?: string | null;
+  toolset?: string | null;
   triggerVersion: number;
 }
 
@@ -73,6 +75,8 @@ function toPayloadInput(inputs: StatusLineInputs): StatusLinePayloadBuildInput {
     permissionMode: inputs.permissionMode,
     networkPhase: inputs.networkPhase,
     terminalWidth: inputs.terminalWidth,
+    systemPromptId: inputs.systemPromptId,
+    toolset: inputs.toolset,
   };
 }
 
