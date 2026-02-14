@@ -1000,7 +1000,7 @@
       "id": "gpt-5.4-pro-medium",
       "handle": "openai/gpt-5.4-pro",
       "label": "GPT-5.4 Pro",
-      "description": "GPT-5.4 Pro — max performance variant (med reasoning)",
+      "description": "GPT-5.4 Pro \u2014 max performance variant (med reasoning)",
       "updateArgs": {
         "reasoning_effort": "medium",
         "verbosity": "medium",
@@ -1013,7 +1013,7 @@
       "id": "gpt-5.4-pro-high",
       "handle": "openai/gpt-5.4-pro",
       "label": "GPT-5.4 Pro",
-      "description": "GPT-5.4 Pro — max performance variant (high reasoning)",
+      "description": "GPT-5.4 Pro \u2014 max performance variant (high reasoning)",
       "updateArgs": {
         "reasoning_effort": "high",
         "verbosity": "medium",
@@ -1026,7 +1026,7 @@
       "id": "gpt-5.4-pro-xhigh",
       "handle": "openai/gpt-5.4-pro",
       "label": "GPT-5.4 Pro",
-      "description": "GPT-5.4 Pro — max performance variant (max reasoning)",
+      "description": "GPT-5.4 Pro \u2014 max performance variant (max reasoning)",
       "updateArgs": {
         "reasoning_effort": "xhigh",
         "verbosity": "medium",
@@ -1441,6 +1441,16 @@
       }
     },
     {
+      "id": "gpt-5-mini-or",
+      "handle": "lc-openrouter/openai/gpt-5-mini",
+      "label": "GPT-5-Mini (OpenRouter)",
+      "description": "GPT-5-Mini via OpenRouter ($0.25/$2.00)",
+      "updateArgs": {
+        "reasoning_effort": "medium",
+        "context_window": 272000
+      }
+    },
+    {
       "id": "gpt-5-nano-medium",
       "handle": "openai/gpt-5-nano-2025-08-07",
       "label": "GPT-5-Nano",
@@ -1451,6 +1461,16 @@
         "context_window": 272000,
         "max_output_tokens": 128000,
         "parallel_tool_calls": true
+      }
+    },
+    {
+      "id": "gpt-5-nano-or",
+      "handle": "lc-openrouter/openai/gpt-5-nano",
+      "label": "GPT-5-Nano (OpenRouter)",
+      "description": "GPT-5-Nano via OpenRouter ($0.05/$0.40)",
+      "updateArgs": {
+        "reasoning_effort": "medium",
+        "context_window": 272000
       }
     },
     {
@@ -1630,6 +1650,24 @@
       "updateArgs": {
         "context_window": 1047576,
         "parallel_tool_calls": true
+      }
+    },
+    {
+      "id": "gpt-4.1-mini-or",
+      "handle": "lc-openrouter/openai/gpt-4.1-mini",
+      "label": "GPT-4.1-Mini (OpenRouter)",
+      "description": "GPT-4.1-Mini via OpenRouter ($0.15/$0.60)",
+      "updateArgs": {
+        "context_window": 128000
+      }
+    },
+    {
+      "id": "gpt-oss-120b",
+      "handle": "groq/openai/gpt-oss-120b",
+      "label": "GPT-OSS-120B",
+      "description": "OpenAI open-source 120B MoE via Groq ($0.10/$0.50)",
+      "updateArgs": {
+        "context_window": 131072
       }
     },
     {
