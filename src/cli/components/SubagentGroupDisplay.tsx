@@ -119,7 +119,7 @@ const AgentRow = memo(
                   {modelDisplay.reasoningEffortLabel && (
                     <Text
                       dimColor
-                    >{`-${modelDisplay.reasoningEffortLabel}`}</Text>
+                    >{` ${modelDisplay.reasoningEffortLabel}`}</Text>
                   )}
                   {modelDisplay.isByokProvider && (
                     <Text
