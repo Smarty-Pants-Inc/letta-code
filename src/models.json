@@ -536,6 +536,44 @@
     }
   },
   {
+    "id": "gpt-5-nano-or",
+    "handle": "lc-openrouter/openai/gpt-5-nano",
+    "label": "GPT-5-Nano (OpenRouter)",
+    "description": "GPT-5-Nano via OpenRouter ($0.05/$0.40)",
+    "updateArgs": {
+      "reasoning_effort": "medium",
+      "context_window": 272000
+    }
+  },
+  {
+    "id": "gpt-5-mini-or",
+    "handle": "lc-openrouter/openai/gpt-5-mini",
+    "label": "GPT-5-Mini (OpenRouter)",
+    "description": "GPT-5-Mini via OpenRouter ($0.25/$2.00)",
+    "updateArgs": {
+      "reasoning_effort": "medium",
+      "context_window": 272000
+    }
+  },
+  {
+    "id": "gpt-4.1-mini-or",
+    "handle": "lc-openrouter/openai/gpt-4.1-mini",
+    "label": "GPT-4.1-Mini (OpenRouter)",
+    "description": "GPT-4.1-Mini via OpenRouter ($0.15/$0.60)",
+    "updateArgs": {
+      "context_window": 128000
+    }
+  },
+  {
+    "id": "gpt-oss-120b",
+    "handle": "groq/openai/gpt-oss-120b",
+    "label": "GPT-OSS-120B",
+    "description": "OpenAI open-source 120B MoE via Groq ($0.10/$0.50)",
+    "updateArgs": {
+      "context_window": 131072
+    }
+  },
+  {
     "id": "glm-5",
     "handle": "zai/glm-5",
     "label": "GLM-5",
