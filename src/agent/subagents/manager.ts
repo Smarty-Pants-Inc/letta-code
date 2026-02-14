@@ -448,9 +448,10 @@ function buildSubagentArgs(
   config: SubagentConfig,
   model: string | null,
   userPrompt: string,
-  existingAgentId?: string,
-  existingConversationId?: string,
-  maxTurns?: number,
+  existingAgentId: string | undefined,
+  existingConversationId: string | undefined,
+  maxTurns: number | undefined,
+  hasUserModelOverride: boolean,
 ): string[] {
   const args: string[] = [];
   const isDeployingExisting = Boolean(
@@ -483,7 +484,15 @@ function buildSubagentArgs(
       `\n\n# Subagent: ${type}\n\n${config.systemPrompt}\n`,
     );
     if (config.updateArgs && Object.keys(config.updateArgs).length > 0) {
-      args.push("--update-args", JSON.stringify(config.updateArgs));
+      // If the caller explicitly selected a model, don't override their reasoning tier
+      // via the subagent's default updateArgs (common for Codex medium/high tiers).
+      const updateArgs = { ...config.updateArgs };
+      if (hasUserModelOverride) {
+        delete (updateArgs as { reasoning_effort?: unknown }).reasoning_effort;
+      }
+      if (Object.keys(updateArgs).length > 0) {
+        args.push("--update-args", JSON.stringify(updateArgs));
+      }
     }
   }
 
@@ -564,10 +573,11 @@ async function executeSubagent(
   baseURL: string,
   subagentId: string,
   isRetry = false,
-  signal?: AbortSignal,
-  existingAgentId?: string,
-  existingConversationId?: string,
-  maxTurns?: number,
+  signal: AbortSignal | undefined,
+  existingAgentId: string | undefined,
+  existingConversationId: string | undefined,
+  maxTurns: number | undefined,
+  hasUserModelOverride: boolean,
 ): Promise<SubagentResult> {
   // Check if already aborted before starting
   if (signal?.aborted) {
@@ -593,6 +603,7 @@ async function executeSubagent(
       existingAgentId,
       existingConversationId,
       maxTurns,
+      hasUserModelOverride,
     );
 
     const currentScript = process.argv[1] || "";
@@ -735,6 +746,7 @@ async function executeSubagent(
             undefined, // existingAgentId
             undefined, // existingConversationId
             maxTurns,
+            hasUserModelOverride,
           );
         }
       }
@@ -910,6 +922,7 @@ export async function spawnSubagent(
     existingAgentId,
     existingConversationId,
     maxTurns,
+    Boolean(userModel),
   );
 
   return result;

@@ -18,7 +18,7 @@ describe("getSubagentModelDisplay", () => {
       label: "GPT-5.2",
       isByokProvider: false,
       isOpenAICodexProvider: false,
-      reasoningEffortLabel: "min",
+      reasoningEffortLabel: "minimal",
     });
   });
 

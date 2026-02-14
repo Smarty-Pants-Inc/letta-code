@@ -3,8 +3,8 @@
 export const MAX_CONTEXT_HISTORY = 1000;
 
 export type ContextTracker = {
-  /** Most recent context_tokens from usage_statistics */
-  lastContextTokens: number;
+  /** Most recent context_tokens from usage_statistics. Null until first snapshot arrives. */
+  lastContextTokens: number | null;
   /** History of context_tokens values for time-series display */
   contextTokensHistory: Array<{
     timestamp: number;
@@ -24,7 +24,7 @@ export type ContextTracker = {
 
 export function createContextTracker(): ContextTracker {
   return {
-    lastContextTokens: 0,
+    lastContextTokens: null,
     contextTokensHistory: [],
     currentTurnId: 0, // simple in-memory counter for now
     pendingCompaction: false,
@@ -35,7 +35,7 @@ export function createContextTracker(): ContextTracker {
 
 /** Reset token tracking (e.g. on agent/conversation switch). currentTurnId is monotonic. */
 export function resetContextHistory(ct: ContextTracker): void {
-  ct.lastContextTokens = 0;
+  ct.lastContextTokens = null;
   ct.contextTokensHistory = [];
   ct.pendingCompaction = false;
   ct.pendingSkillsReinject = false;

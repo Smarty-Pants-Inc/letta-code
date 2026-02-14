@@ -2122,6 +2122,7 @@ export default function App({
     totalOutputTokens: sessionStatsSnapshot.usage.completionTokens,
     contextWindowSize,
     usedContextTokens: contextTrackerRef.current.lastContextTokens,
+    reasoningEffort: llmConfigRef.current?.reasoning_effort ?? null,
     permissionMode: permissionMode.getMode(),
     networkPhase,
     terminalWidth: columns,
@@ -2139,7 +2140,7 @@ export default function App({
     previousStreamingForStatusLineRef.current = streaming;
   }, [streaming, triggerStatusLineRefresh]);
 
-  const statusLineRefreshIdentity = `${conversationId}|${currentModelDisplay ?? ""}|${currentModelProvider ?? ""}|${agentName ?? ""}|${columns}|${contextWindowSize ?? ""}|${currentSystemPromptId ?? ""}|${currentToolset ?? ""}`;
+  const statusLineRefreshIdentity = `${conversationId}|${currentModelDisplay ?? ""}|${currentModelProvider ?? ""}|${agentName ?? ""}|${columns}|${contextWindowSize ?? ""}|${currentSystemPromptId ?? ""}|${currentToolset ?? ""}|${llmConfigRef.current?.reasoning_effort ?? ""}`;
 
   // Trigger status line when key session identity/display state changes.
   useEffect(() => {
@@ -6551,6 +6552,8 @@ export default function App({
                     contextWindowSize: llmConfigRef.current?.context_window,
                     usedContextTokens:
                       contextTrackerRef.current.lastContextTokens,
+                    reasoningEffort:
+                      llmConfigRef.current?.reasoning_effort ?? null,
                     permissionMode: uiPermissionMode,
                     networkPhase,
                     terminalWidth: columns,
@@ -6682,7 +6685,7 @@ export default function App({
           const model = llmConfigRef.current?.model ?? "unknown";
 
           // Use most recent total tokens from usage_statistics as context size (after turn)
-          const usedTokens = contextTrackerRef.current.lastContextTokens;
+          const usedTokens = contextTrackerRef.current.lastContextTokens ?? 0;
           const history = contextTrackerRef.current.contextTokensHistory;
 
           const cmd = commandRunner.start(

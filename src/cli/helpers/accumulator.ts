@@ -1165,7 +1165,7 @@ export function onChunk(
         // Fire PreCompact hooks when server-side auto-compaction starts
         if (eventType === "compaction") {
           runPreCompactHooks(
-            ctx?.lastContextTokens,
+            ctx?.lastContextTokens ?? undefined,
             undefined, // max_context_length not available here
             b.agentId,
             undefined, // conversationId not available here
