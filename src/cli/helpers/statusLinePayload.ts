@@ -15,7 +15,8 @@ export interface StatusLinePayloadBuildInput {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   contextWindowSize?: number;
-  usedContextTokens?: number;
+  usedContextTokens?: number | null;
+  reasoningEffort?: string | null;
   permissionMode?: string;
   networkPhase?: "upload" | "download" | "error" | null;
   terminalWidth?: number;
@@ -45,6 +46,7 @@ export interface StatusLinePayload {
     id: string | null;
     display_name: string | null;
   };
+  reasoning_effort: string | null;
   output_style: {
     name: string | null;
   };
@@ -114,13 +116,14 @@ export function buildStatusLinePayload(
     0,
     Math.floor(input.contextWindowSize ?? 0),
   );
-  const usedContextTokens = Math.max(
-    0,
-    Math.floor(input.usedContextTokens ?? 0),
-  );
+  const usedContextTokensRaw = input.usedContextTokens;
+  const usedContextTokens =
+    usedContextTokensRaw === null || usedContextTokensRaw === undefined
+      ? null
+      : Math.max(0, Math.floor(usedContextTokensRaw));
 
   const percentages =
-    contextWindowSize > 0
+    contextWindowSize > 0 && usedContextTokens !== null
       ? calculateContextPercentages(usedContextTokens, contextWindowSize)
       : null;
 
@@ -140,6 +143,7 @@ export function buildStatusLinePayload(
       id: input.modelId ?? null,
       display_name: input.modelDisplayName ?? null,
     },
+    reasoning_effort: input.reasoningEffort ?? null,
     output_style: {
       name: null,
     },
@@ -158,7 +162,7 @@ export function buildStatusLinePayload(
       remaining_percentage: percentages?.remaining ?? null,
       current_usage: null,
     },
-    exceeds_200k_tokens: usedContextTokens > 200_000,
+    exceeds_200k_tokens: (usedContextTokens ?? 0) > 200_000,
     vim: null,
     agent: {
       name: input.agentName ?? null,

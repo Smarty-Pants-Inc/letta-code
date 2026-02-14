@@ -92,7 +92,7 @@ const AgentRow = memo(({ agent, isLast }: AgentRowProps) => {
             <>
               <Text dimColor>{` · ${modelDisplay.label}`}</Text>
               {modelDisplay.reasoningEffortLabel && (
-                <Text dimColor>{`-${modelDisplay.reasoningEffortLabel}`}</Text>
+                <Text dimColor>{` ${modelDisplay.reasoningEffortLabel}`}</Text>
               )}
               {modelDisplay.isByokProvider && (
                 <Text

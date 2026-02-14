@@ -77,22 +77,18 @@ export function getSubagentModelDisplay(
     getModelShortName(normalized) ?? normalized.split("/").pop() ?? normalized;
 
   const effort = typeof reasoningEffort === "string" ? reasoningEffort : null;
+
+  // Match the footer style: show the full reasoning tier (no dash, no abbreviations).
+  // Normalize legacy/alias values (e.g. "med" -> "medium"). Hide unknown values.
+  const normalizedEffort =
+    effort === "med" ? "medium" : effort === "min" ? "minimal" : effort;
+  const allowedEfforts = new Set(["minimal", "low", "medium", "high", "xhigh"]);
   const effortLabel =
-    effort === "none" || !effort
+    normalizedEffort === "none" || !normalizedEffort
       ? undefined
-      : effort === "minimal"
-        ? "min"
-        : effort === "medium"
-          ? "med"
-          : effort === "med"
-            ? "med"
-            : effort === "low"
-              ? "low"
-              : effort === "high"
-                ? "high"
-                : effort === "xhigh"
-                  ? "xhigh"
-                  : undefined;
+      : allowedEfforts.has(normalizedEffort)
+        ? normalizedEffort
+        : undefined;
 
   return {
     label,
