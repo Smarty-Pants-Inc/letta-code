@@ -618,6 +618,25 @@ async function executeSubagent(
     let lettaCmd = process.env.LETTA_CODE_BIN || "";
     const lettaCmdArgsPrefix: string[] = [];
 
+    // Allow callers (e.g. wrapper scripts) to provide a stable invocation for
+    // spawning Letta Code child processes.
+    //
+    // Example: LETTA_CODE_BIN=bun and LETTA_CODE_BIN_ARGS_JSON='["--loader=...","run","/path/to/index.ts"]'
+    const explicitArgsJson = process.env.LETTA_CODE_BIN_ARGS_JSON?.trim();
+    if (lettaCmd && explicitArgsJson) {
+      try {
+        const parsed = JSON.parse(explicitArgsJson) as unknown;
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((v) => typeof v === "string")
+        ) {
+          lettaCmdArgsPrefix.push(...(parsed as string[]));
+        }
+      } catch {
+        // Ignore malformed JSON and fall back to spawning without a prefix.
+      }
+    }
+
     if (!lettaCmd) {
       if (currentScript.endsWith(".js")) {
         lettaCmd = currentScript;
