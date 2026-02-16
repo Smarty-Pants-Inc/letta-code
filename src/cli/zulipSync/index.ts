@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { debugLog, debugWarn } from "../../utils/debug";
 
@@ -23,6 +25,54 @@ interface ResolvedThread {
   streamName: string;
   topic: string;
   anchorMessageId?: number;
+}
+
+interface LocalDedupeEntry {
+  kind: "mirror" | "bootstrap" | "rename";
+  key: string;
+  timestampMs: number;
+  zulipMessageId?: number;
+}
+
+interface LocalDedupeState {
+  schemaVersion: 1;
+  realmId: string;
+  runtimeAgentId: string;
+  conversationId: string;
+  updatedAtMs: number;
+  entries: LocalDedupeEntry[];
+}
+
+const DEDUPE_SCHEMA_VERSION = 1;
+const DEDUPE_MAX_ENTRIES = 50;
+const DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const MIRROR_SENTINEL = "\u200B\u200C\u200B";
+
+function hashToHex(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function sanitizePathComponent(value: string): string {
+  const cleaned = value.trim().replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return (cleaned || "unknown").slice(0, 120);
+}
+
+function normalizeTurnText(value: string | undefined): string {
+  return String(value || "").trim();
+}
+
+function buildMirrorDedupeKey(args: {
+  conversationId: string;
+  userText?: string;
+  assistantText?: string;
+}): string {
+  const userText = normalizeTurnText(args.userText);
+  const assistantText = normalizeTurnText(args.assistantText);
+  const digest = hashToHex(
+    `${args.conversationId}\n${userText}\n${assistantText}`,
+  );
+  return `mirror:${digest}`;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -181,11 +231,11 @@ function formatMirroredTurn(args: {
   const parts: string[] = [];
 
   if (userText) {
-    parts.push("**Paul → Letta**\n" + userText);
+    parts.push(`**Paul → Letta**\n${userText}`);
   }
 
   if (assistantText) {
-    parts.push("**Letta → Paul**\n" + assistantText);
+    parts.push(`**Letta → Paul**\n${assistantText}`);
   }
 
   return parts.join("\n\n").trim();
@@ -200,6 +250,8 @@ export class LocalZulipSyncManager {
   private readonly config: SmartyProjectZulipConfig;
   private readonly env: ZulipSyncEnv;
   private readonly conversationId: string;
+  private readonly dedupeStatePath: string;
+  private dedupeStateCache: LocalDedupeState | null = null;
   private resolvedThread: ResolvedThread | null | undefined;
   private lastResolveAttemptMs = 0;
   private resolveThreadInFlight: Promise<ResolvedThread | null> | null = null;
@@ -212,6 +264,7 @@ export class LocalZulipSyncManager {
     this.config = config;
     this.env = env;
     this.conversationId = conversationId;
+    this.dedupeStatePath = this.getDedupeStatePath();
   }
 
   public async mirrorTurn(args: {
@@ -219,13 +272,28 @@ export class LocalZulipSyncManager {
     assistantText?: string;
   }): Promise<void> {
     try {
-      const content = formatMirroredTurn(args);
-      if (!content) return;
+      const mirroredContent = formatMirroredTurn(args);
+      if (!mirroredContent) return;
+      const content = `${mirroredContent}${MIRROR_SENTINEL}`;
+
+      const idempotencyKey = buildMirrorDedupeKey({
+        conversationId: this.conversationId,
+        userText: args.userText,
+        assistantText: args.assistantText,
+      });
+
+      if (this.hasRecentDedupeEntry("mirror", idempotencyKey)) {
+        debugLog("zulip-sync", "Skipping duplicate mirrored turn", {
+          conversationId: this.conversationId,
+          idempotencyKey,
+        });
+        return;
+      }
 
       const thread = await this.resolveThread();
       if (!thread) return;
 
-      await this.sendToZulip(
+      const result = await this.sendToZulip(
         `${normalizeBaseUrl(this.config.realmUrl)}/api/v1/messages`,
         new URLSearchParams({
           type: "stream",
@@ -234,6 +302,16 @@ export class LocalZulipSyncManager {
           content,
         }),
       );
+
+      this.recordDedupeEntry({
+        kind: "mirror",
+        key: idempotencyKey,
+        zulipMessageId: getFirstNumber(result, [
+          "id",
+          "message_id",
+          "messageId",
+        ]),
+      });
     } catch (error) {
       debugWarn("zulip-sync", "Failed to mirror turn", error);
     }
@@ -254,6 +332,16 @@ export class LocalZulipSyncManager {
         return;
       }
 
+      const renameKey = `rename:${thread.anchorMessageId}:${hashToHex(topic)}`;
+      if (this.hasRecentDedupeEntry("rename", renameKey)) {
+        debugLog("zulip-sync", "Skipping duplicate topic rename", {
+          conversationId: this.conversationId,
+          anchorMessageId: thread.anchorMessageId,
+          topic,
+        });
+        return;
+      }
+
       await this.sendToZulip(
         `${normalizeBaseUrl(this.config.realmUrl)}/api/v1/messages/${thread.anchorMessageId}`,
         new URLSearchParams({
@@ -264,6 +352,12 @@ export class LocalZulipSyncManager {
         }),
         "PATCH",
       );
+
+      this.recordDedupeEntry({
+        kind: "rename",
+        key: renameKey,
+        zulipMessageId: thread.anchorMessageId,
+      });
 
       this.resolvedThread = { ...thread, topic };
     } catch (error) {
@@ -333,14 +427,17 @@ export class LocalZulipSyncManager {
         return bootstrapped;
       }
 
-      const threadResult = await this.controlPlanePost("/s2s/zulip/threads/get", {
-        bindingId,
-        binding_id: bindingId,
-        threadId,
-        thread_id: threadId,
-        realmId: this.config.realmId,
-        realm_id: this.config.realmId,
-      });
+      const threadResult = await this.controlPlanePost(
+        "/s2s/zulip/threads/get",
+        {
+          bindingId,
+          binding_id: bindingId,
+          threadId,
+          thread_id: threadId,
+          realmId: this.config.realmId,
+          realm_id: this.config.realmId,
+        },
+      );
 
       const threadData = getRecord(threadResult);
       const topic =
@@ -398,31 +495,66 @@ export class LocalZulipSyncManager {
     bindingId: string,
   ): Promise<ResolvedThread | null> {
     const topic = deterministicTopicFromConversationId(this.conversationId);
-    const anchor = await this.sendToZulip(
-      `${normalizeBaseUrl(this.config.realmUrl)}/api/v1/messages`,
-      new URLSearchParams({
-        type: "stream",
-        to: this.config.streamName,
-        topic,
-        content: `Thread bootstrap anchor for Letta conversation ${this.conversationId}`,
-      }),
+    const bootstrapKey = `bootstrap:${this.conversationId}:${hashToHex(topic)}`;
+    const previousBootstrap = this.getRecentDedupeEntry(
+      "bootstrap",
+      bootstrapKey,
     );
 
-    const anchorMessageId = getFirstNumber(anchor, ["id", "message_id", "messageId"]);
+    // Control plane thread resolution is stream-id based.
+    const streamId = await this.resolveZulipStreamIdByName(
+      this.config.streamName,
+    );
+    if (!streamId) {
+      throw new Error(
+        `Failed to resolve Zulip stream id for stream name: ${this.config.streamName}`,
+      );
+    }
+
+    let anchorMessageId = previousBootstrap?.zulipMessageId;
     if (!anchorMessageId) {
-      throw new Error("Zulip bootstrap did not return an anchor message id");
+      const anchor = await this.sendToZulip(
+        `${normalizeBaseUrl(this.config.realmUrl)}/api/v1/messages`,
+        new URLSearchParams({
+          type: "stream",
+          to: this.config.streamName,
+          topic,
+          content: `Thread bootstrap anchor for Letta conversation ${this.conversationId}`,
+        }),
+      );
+
+      anchorMessageId = getFirstNumber(anchor, [
+        "id",
+        "message_id",
+        "messageId",
+      ]);
+      if (!anchorMessageId) {
+        throw new Error("Zulip bootstrap did not return an anchor message id");
+      }
+
+      this.recordDedupeEntry({
+        kind: "bootstrap",
+        key: bootstrapKey,
+        zulipMessageId: anchorMessageId,
+      });
+    } else {
+      debugLog("zulip-sync", "Reusing previous bootstrap anchor message id", {
+        conversationId: this.conversationId,
+        anchorMessageId,
+      });
     }
 
     const resolvedThread = getRecord(
       await this.controlPlanePost("/s2s/zulip/threads/resolve", {
-        bindingId,
-        binding_id: bindingId,
-        runtimeAgentId: this.config.runtimeAgentId,
-        runtime_agent_id: this.config.runtimeAgentId,
         realmId: this.config.realmId,
         realm_id: this.config.realmId,
+        realmName: undefined,
+
+        streamId: String(streamId),
+        stream_id: String(streamId),
         streamName: this.config.streamName,
         stream_name: this.config.streamName,
+
         topic,
         anchorMessageId,
         anchor_message_id: anchorMessageId,
@@ -440,21 +572,15 @@ export class LocalZulipSyncManager {
     }
 
     await this.controlPlanePost("/s2s/zulip/runtime_conversation/upsert", {
-      bindingId,
-      binding_id: bindingId,
-      runtimeAgentId: this.config.runtimeAgentId,
-      runtime_agent_id: this.config.runtimeAgentId,
-      conversationId: this.conversationId,
-      conversation_id: this.conversationId,
       realmId: this.config.realmId,
       realm_id: this.config.realmId,
+      bindingId,
+      binding_id: bindingId,
       threadId,
       thread_id: threadId,
-      streamName: this.config.streamName,
-      stream_name: this.config.streamName,
-      topic,
-      anchorMessageId,
-      anchor_message_id: anchorMessageId,
+      conversationId: this.conversationId,
+      conversation_id: this.conversationId,
+      source: "created",
     });
 
     return {
@@ -499,6 +625,56 @@ export class LocalZulipSyncManager {
     return null;
   }
 
+  private async resolveZulipStreamIdByName(
+    streamName: string,
+  ): Promise<number | null> {
+    const name = streamName.trim();
+    if (!name) return null;
+
+    const base = normalizeBaseUrl(this.config.realmUrl);
+    const url = `${base}/api/v1/get_stream_id?stream=${encodeURIComponent(name)}`;
+    const payload = await this.getFromZulip(url);
+    const data = getRecord(payload);
+    const id = getFirstNumber(data, ["stream_id", "streamId", "id"]);
+    return typeof id === "number" ? id : null;
+  }
+
+  private async getFromZulip(url: string): Promise<unknown> {
+    const token = Buffer.from(
+      `${this.env.zulipUserEmail}:${this.env.zulipUserApiKey}`,
+    ).toString("base64");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${token}`,
+      },
+    });
+
+    const responseText = await response.text().catch(() => "");
+    let responsePayload: unknown = null;
+    try {
+      responsePayload = responseText
+        ? (JSON.parse(responseText) as unknown)
+        : null;
+    } catch {
+      responsePayload = responseText;
+    }
+
+    if (!response.ok) {
+      if (response.status === 401 && /invalid api key/i.test(responseText)) {
+        debugWarn(
+          "zulip-sync",
+          "Zulip returned 401 Invalid API key. Verify ZULIP_USER_EMAIL is your Zulip delivery_email (Settings > Account & privacy), not your login identity.",
+        );
+      }
+      throw new Error(`Zulip GET failed (${response.status}): ${responseText}`);
+    }
+
+    return responsePayload;
+  }
+
   private async controlPlanePost(
     path: string,
     payload: Record<string, unknown>,
@@ -517,7 +693,9 @@ export class LocalZulipSyncManager {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Control plane request failed (${response.status}): ${body}`);
+      throw new Error(
+        `Control plane request failed (${response.status}): ${body}`,
+      );
     }
 
     return response.json();
@@ -558,10 +736,181 @@ export class LocalZulipSyncManager {
           "Zulip returned 401 Invalid API key. Verify ZULIP_USER_EMAIL is your Zulip delivery_email (Settings > Account & privacy), not your login identity.",
         );
       }
-      throw new Error(`Zulip request failed (${response.status}): ${responseText}`);
+      throw new Error(
+        `Zulip request failed (${response.status}): ${responseText}`,
+      );
     }
 
     return getRecord(responsePayload);
+  }
+
+  private getDedupeStatePath(): string {
+    const baseDir = join(
+      process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+      "letta-code",
+      "zulip-sync",
+      sanitizePathComponent(this.config.realmId),
+      sanitizePathComponent(this.config.runtimeAgentId),
+    );
+
+    return join(baseDir, `${sanitizePathComponent(this.conversationId)}.json`);
+  }
+
+  private loadDedupeState(): LocalDedupeState {
+    if (this.dedupeStateCache) {
+      return this.pruneDedupeState(this.dedupeStateCache);
+    }
+
+    const fallback: LocalDedupeState = {
+      schemaVersion: DEDUPE_SCHEMA_VERSION,
+      realmId: this.config.realmId,
+      runtimeAgentId: this.config.runtimeAgentId,
+      conversationId: this.conversationId,
+      updatedAtMs: Date.now(),
+      entries: [],
+    };
+
+    if (!existsSync(this.dedupeStatePath)) {
+      this.dedupeStateCache = fallback;
+      return fallback;
+    }
+
+    try {
+      const parsed = JSON.parse(
+        readFileSync(this.dedupeStatePath, "utf8"),
+      ) as unknown;
+      const obj = getRecord(parsed);
+
+      const parsedSchema = getFirstNumber(obj, ["schemaVersion"]);
+      const realmId = getFirstString(obj, ["realmId"]);
+      const runtimeAgentId = getFirstString(obj, ["runtimeAgentId"]);
+      const conversationId = getFirstString(obj, ["conversationId"]);
+
+      if (
+        parsedSchema !== DEDUPE_SCHEMA_VERSION ||
+        realmId !== this.config.realmId ||
+        runtimeAgentId !== this.config.runtimeAgentId ||
+        conversationId !== this.conversationId
+      ) {
+        this.dedupeStateCache = fallback;
+        return fallback;
+      }
+
+      const rawEntries = Array.isArray(obj.entries) ? obj.entries : [];
+      const entries: LocalDedupeEntry[] = [];
+      for (const item of rawEntries) {
+        const entry = getRecord(item);
+        const kind = getFirstString(entry, ["kind"]);
+        const key = getFirstString(entry, ["key"]);
+        const timestampMs = getFirstNumber(entry, ["timestampMs"]);
+        if (
+          (kind === "mirror" || kind === "bootstrap" || kind === "rename") &&
+          key &&
+          typeof timestampMs === "number"
+        ) {
+          entries.push({
+            kind,
+            key,
+            timestampMs,
+            zulipMessageId: getFirstNumber(entry, ["zulipMessageId"]),
+          });
+        }
+      }
+
+      this.dedupeStateCache = this.pruneDedupeState({
+        schemaVersion: DEDUPE_SCHEMA_VERSION,
+        realmId,
+        runtimeAgentId,
+        conversationId,
+        updatedAtMs: getFirstNumber(obj, ["updatedAtMs"]) || Date.now(),
+        entries,
+      });
+
+      return this.dedupeStateCache;
+    } catch (error) {
+      debugWarn("zulip-sync", "Failed to read local Zulip dedupe state", error);
+      this.dedupeStateCache = fallback;
+      return fallback;
+    }
+  }
+
+  private pruneDedupeState(state: LocalDedupeState): LocalDedupeState {
+    const cutoff = Date.now() - DEDUPE_TTL_MS;
+    const recent = state.entries
+      .filter((entry) => entry.timestampMs >= cutoff)
+      .sort((a, b) => a.timestampMs - b.timestampMs)
+      .slice(-DEDUPE_MAX_ENTRIES);
+
+    const pruned: LocalDedupeState = {
+      ...state,
+      updatedAtMs: Date.now(),
+      entries: recent,
+    };
+    this.dedupeStateCache = pruned;
+    return pruned;
+  }
+
+  private persistDedupeState(state: LocalDedupeState): void {
+    try {
+      mkdirSync(dirname(this.dedupeStatePath), { recursive: true });
+      writeFileSync(
+        this.dedupeStatePath,
+        JSON.stringify(state, null, 2),
+        "utf8",
+      );
+    } catch (error) {
+      debugWarn(
+        "zulip-sync",
+        "Failed to persist local Zulip dedupe state",
+        error,
+      );
+    }
+  }
+
+  private getRecentDedupeEntry(
+    kind: LocalDedupeEntry["kind"],
+    key: string,
+  ): LocalDedupeEntry | null {
+    const state = this.loadDedupeState();
+    for (let index = state.entries.length - 1; index >= 0; index -= 1) {
+      const entry = state.entries[index];
+      if (entry && entry.kind === kind && entry.key === key) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  private hasRecentDedupeEntry(
+    kind: LocalDedupeEntry["kind"],
+    key: string,
+  ): boolean {
+    return this.getRecentDedupeEntry(kind, key) !== null;
+  }
+
+  private recordDedupeEntry(params: {
+    kind: LocalDedupeEntry["kind"];
+    key: string;
+    zulipMessageId?: number;
+  }): void {
+    const state = this.loadDedupeState();
+    const entries = state.entries.filter(
+      (entry) => !(entry.kind === params.kind && entry.key === params.key),
+    );
+
+    entries.push({
+      kind: params.kind,
+      key: params.key,
+      timestampMs: Date.now(),
+      zulipMessageId: params.zulipMessageId,
+    });
+
+    const nextState = this.pruneDedupeState({
+      ...state,
+      entries,
+      updatedAtMs: Date.now(),
+    });
+    this.persistDedupeState(nextState);
   }
 }
 
