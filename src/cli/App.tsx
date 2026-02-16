@@ -257,6 +257,7 @@ import { useConfigurableStatusLine } from "./hooks/useConfigurableStatusLine";
 import { useSuspend } from "./hooks/useSuspend/useSuspend.ts";
 import { useSyncedState } from "./hooks/useSyncedState";
 import { useTerminalRows, useTerminalWidth } from "./hooks/useTerminalWidth";
+import { createLocalZulipSyncManager } from "./zulipSync";
 
 // Used only for terminal resize, not for dialog dismissal (see PR for details)
 const CLEAR_SCREEN_AND_HOME = "\u001B[2J\u001B[H";
@@ -915,6 +916,17 @@ export default function App({
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  const zulipSyncManagerRef = useRef<ReturnType<
+    typeof createLocalZulipSyncManager
+  > | null>(null);
+  useEffect(() => {
+    zulipSyncManagerRef.current = createLocalZulipSyncManager({
+      workingDirectory: projectDirectory,
+      agentId,
+      conversationId,
+    });
+  }, [projectDirectory, agentId, conversationId]);
 
   // Optional: follow conversation for out-of-band updates (other writers).
   // Disabled by default; enable via env var to keep upstream behavior conservative.
@@ -3972,6 +3984,13 @@ export default function App({
               lastUser && "text" in lastUser ? lastUser.text : undefined;
             const precedingReasoning = buffersRef.current.lastReasoning;
             buffersRef.current.lastReasoning = undefined; // Clear after use
+
+            // Best-effort local mirror to Zulip; never block turn completion.
+            // Note: we mirror the whole turn (user + assistant) so the Zulip thread is readable.
+            void zulipSyncManagerRef.current?.mirrorTurn({
+              userText: userMessage,
+              assistantText: assistantMessage,
+            });
 
             // Run Stop hooks - if blocked/errored, continue the conversation with feedback
             const stopHookResult = await runStopHooks(
@@ -7243,6 +7262,9 @@ export default function App({
               await client.conversations.update(conversationId, {
                 summary: newValue,
               });
+
+              // Best-effort sync to linked Zulip topic; failures are swallowed.
+              void zulipSyncManagerRef.current?.renameConversationTopic(newValue);
 
               cmd.finish(`Conversation renamed to "${newValue}"`, true);
             } catch (error) {
