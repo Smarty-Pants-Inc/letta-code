@@ -1092,17 +1092,28 @@ export default function App({
   const zulipSyncManagerRef = useRef<ReturnType<
     typeof createLocalZulipSyncManager
   > | null>(null);
+  const [zulipSyncActive, setZulipSyncActive] = useState(false);
   useEffect(() => {
     zulipSyncManagerRef.current = createLocalZulipSyncManager({
       workingDirectory: projectDirectory,
       agentId,
       conversationId,
     });
+    setZulipSyncActive(zulipSyncManagerRef.current !== null);
   }, [projectDirectory, agentId, conversationId]);
 
   // Optional: follow conversation for out-of-band updates (other writers).
-  // Disabled by default; enable via env var to keep upstream behavior conservative.
-  const followPollMs = Number(process.env.LETTA_CODE_FOLLOW_POLL_MS || "0");
+  // With local Zulip sync active, default follow polling on to surface external updates.
+  // An explicit LETTA_CODE_FOLLOW_POLL_MS always wins (including 0 to disable).
+  const hasExplicitFollowPollMs = Object.hasOwn(
+    process.env,
+    "LETTA_CODE_FOLLOW_POLL_MS",
+  );
+  const followPollMs = hasExplicitFollowPollMs
+    ? Number(process.env.LETTA_CODE_FOLLOW_POLL_MS)
+    : zulipSyncActive
+      ? 2000
+      : 0;
   const followEnabled = followPollMs > 0;
   const followCursorRef = useRef<string | null>(null);
   const followInFlightRef = useRef(false);
@@ -8423,7 +8434,9 @@ export default function App({
               });
 
               // Best-effort sync to linked Zulip topic; failures are swallowed.
-              void zulipSyncManagerRef.current?.renameConversationTopic(newValue);
+              void zulipSyncManagerRef.current?.renameConversationTopic(
+                newValue,
+              );
 
               cmd.finish(`Conversation renamed to "${newValue}"`, true);
             } catch (error) {
