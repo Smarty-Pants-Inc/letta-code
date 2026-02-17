@@ -79,42 +79,39 @@ export const AgentInfoBar = memo(function AgentInfoBar({
         )}
       </Box>
 
-      {/* Alien + Links */}
+      {/* Alien + ADE link */}
       <Box>
         <Text color={colors.footer.agentName}>{alienLines[1]}</Text>
         {isCloudUser && adeUrl && !isTmux && (
-          <>
-            <Link url={adeUrl}>
-              <Text>Open in ADE ↗</Text>
-            </Link>
-            <Text dimColor>· </Text>
-          </>
+          <Link url={adeUrl}>
+            <Text>Open in ADE ↗</Text>
+          </Link>
         )}
         {isCloudUser && adeUrl && isTmux && (
-          <Text dimColor>Open in ADE: {adeUrl} · </Text>
+          <Text dimColor>Open in ADE: {adeUrl}</Text>
         )}
+        {!isCloudUser && <Text dimColor>{serverUrl}</Text>}
+      </Box>
+
+      {/* Alien + Usage link (separate line to prevent terminal OSC 8 link merging) */}
+      <Box>
+        <Text color={colors.footer.agentName}>{alienLines[2]}</Text>
         {isCloudUser && (
           <Link url="https://app.letta.com/settings/organization/usage">
             <Text>View usage ↗</Text>
           </Link>
         )}
-        {!isCloudUser && <Text dimColor>{serverUrl}</Text>}
       </Box>
 
-      {/* Alien + Agent ID */}
-      <Box>
-        <Text color={colors.footer.agentName}>{alienLines[2]}</Text>
-        <Text dimColor>{agentId}</Text>
-      </Box>
-
-      {/* Phantom alien row + Conversation ID */}
+      {/* Agent ID + Conversation ID */}
       <Box>
         <Text>{alienLines[3]}</Text>
-        {conversationId && conversationId !== "default" ? (
-          <Text dimColor>{conversationId}</Text>
-        ) : (
-          <Text dimColor>default conversation</Text>
-        )}
+        <Text dimColor>
+          {agentId}
+          {conversationId && conversationId !== "default"
+            ? ` · ${conversationId}`
+            : ""}
+        </Text>
       </Box>
     </Box>
   );
