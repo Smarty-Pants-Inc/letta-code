@@ -36,13 +36,28 @@ export function getReasoningTierOptionsForHandle(modelHandle: string): Array<{
 }> {
   const byEffort = new Map<ModelReasoningEffort, string>();
 
-  for (const model of models) {
-    if (model.handle !== modelHandle) continue;
-    const effort = (model.updateArgs as { reasoning_effort?: unknown } | null)
-      ?.reasoning_effort;
-    if (!isModelReasoningEffort(effort)) continue;
-    if (!byEffort.has(effort)) {
-      byEffort.set(effort, model.id);
+  const collectByPredicate = (predicate: (handle: string) => boolean): void => {
+    for (const model of models) {
+      if (!predicate(model.handle)) continue;
+      const effort = (model.updateArgs as { reasoning_effort?: unknown } | null)
+        ?.reasoning_effort;
+      if (!isModelReasoningEffort(effort)) continue;
+      if (!byEffort.has(effort)) {
+        byEffort.set(effort, model.id);
+      }
+    }
+  };
+
+  // Primary: exact handle match.
+  collectByPredicate((handle) => handle === modelHandle);
+
+  // Fallback: if provider prefix differs from models.json (e.g. chatgpt_oauth/* vs
+  // chatgpt-plus-pro/*), match by model suffix.
+  if (byEffort.size === 0 && modelHandle.includes("/")) {
+    const slashIndex = modelHandle.indexOf("/");
+    const modelSuffix = modelHandle.slice(slashIndex + 1);
+    if (modelSuffix) {
+      collectByPredicate((handle) => handle.endsWith(`/${modelSuffix}`));
     }
   }
 
