@@ -296,16 +296,30 @@ const InputFooter = memo(function InputFooter({
 
   // Avoid double-printing: many status line commands already include agent/model
   // info in their right column.
+  //
+  // If we detect explicit toolset/system prompt fields ("s:"/"t:"), prefer showing
+  // only those extra lines while keeping the live model label on top.
   const statusLineRightTrimmed = statusLineRight?.trim() || "";
-  const statusLineRightLooksRedundant =
-    Boolean(statusLineRightTrimmed) &&
-    ((agentName && statusLineRightTrimmed.includes(agentName)) ||
-      (currentModel && statusLineRightTrimmed.includes(currentModel)) ||
-      (reasoningTag && statusLineRightTrimmed.includes(reasoningTag)));
+  const statusLineRightLines = statusLineRightTrimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const isSTLine = (line: string): boolean => /\b[st]:/i.test(line);
+  const hasSTLines = statusLineRightLines.some(isSTLine);
+
+  const statusLineRightLinesToRender = hasSTLines
+    ? statusLineRightLines.filter(isSTLine)
+    : statusLineRightLines.filter((line) => {
+        // Drop lines that just restate the model/agent label.
+        if (agentName && line.includes(agentName)) return false;
+        if (currentModel && line.includes(currentModel)) return false;
+        if (reasoningTag && line.includes(reasoningTag)) return false;
+        return true;
+      });
+
   const shouldRenderStatusLineRight =
-    !hideFooterContent &&
-    Boolean(statusLineRightTrimmed) &&
-    !statusLineRightLooksRedundant;
+    !hideFooterContent && statusLineRightLinesToRender.length > 0;
 
   return (
     <Box flexDirection="row" marginBottom={1}>
@@ -363,7 +377,7 @@ const InputFooter = memo(function InputFooter({
           <Text>{rightLabel}</Text>
         )}
         {shouldRenderStatusLineRight
-          ? statusLineRightTrimmed.split("\n").map((line, i) => (
+          ? statusLineRightLinesToRender.map((line, i) => (
               <Text key={`${i}-${line}`} wrap="truncate-end">
                 {parseOsc8Line(line, `r${i}`)}
               </Text>
