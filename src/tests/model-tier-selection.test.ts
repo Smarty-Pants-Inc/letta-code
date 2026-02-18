@@ -86,6 +86,19 @@ describe("getReasoningTierOptionsForHandle", () => {
     ]);
   });
 
+  test("falls back to model-suffix match when provider prefix differs", () => {
+    const options = getReasoningTierOptionsForHandle(
+      "chatgpt_oauth/gpt-5.3-codex",
+    );
+    expect(options.map((option) => option.effort)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
   test("returns reasoning options for anthropic sonnet 4.6", () => {
     const options = getReasoningTierOptionsForHandle(
       "anthropic/claude-sonnet-4-6",
