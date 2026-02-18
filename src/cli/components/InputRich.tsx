@@ -294,6 +294,19 @@ const InputFooter = memo(function InputFooter({
     isOpenAICodexProvider,
   ]);
 
+  // Avoid double-printing: many status line commands already include agent/model
+  // info in their right column.
+  const statusLineRightTrimmed = statusLineRight?.trim() || "";
+  const statusLineRightLooksRedundant =
+    Boolean(statusLineRightTrimmed) &&
+    ((agentName && statusLineRightTrimmed.includes(agentName)) ||
+      (currentModel && statusLineRightTrimmed.includes(currentModel)) ||
+      (reasoningTag && statusLineRightTrimmed.includes(reasoningTag)));
+  const shouldRenderStatusLineRight =
+    !hideFooterContent &&
+    Boolean(statusLineRightTrimmed) &&
+    !statusLineRightLooksRedundant;
+
   return (
     <Box flexDirection="row" marginBottom={1}>
       <Box flexGrow={1} paddingRight={1}>
@@ -339,15 +352,9 @@ const InputFooter = memo(function InputFooter({
         )}
       </Box>
       <Box
-        flexDirection={
-          statusLineRight && !hideFooterContent ? "column" : undefined
-        }
-        alignItems={
-          statusLineRight && !hideFooterContent ? "flex-end" : undefined
-        }
-        width={
-          statusLineRight && !hideFooterContent ? undefined : rightColumnWidth
-        }
+        flexDirection={shouldRenderStatusLineRight ? "column" : undefined}
+        alignItems={shouldRenderStatusLineRight ? "flex-end" : undefined}
+        width={shouldRenderStatusLineRight ? undefined : rightColumnWidth}
         flexShrink={0}
       >
         {hideFooterContent ? (
@@ -355,8 +362,8 @@ const InputFooter = memo(function InputFooter({
         ) : (
           <Text>{rightLabel}</Text>
         )}
-        {!hideFooterContent && statusLineRight
-          ? statusLineRight.split("\n").map((line, i) => (
+        {shouldRenderStatusLineRight
+          ? statusLineRightTrimmed.split("\n").map((line, i) => (
               <Text key={`${i}-${line}`} wrap="truncate-end">
                 {parseOsc8Line(line, `r${i}`)}
               </Text>
