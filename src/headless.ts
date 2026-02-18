@@ -34,6 +34,7 @@ import {
   getModelUpdateArgs,
   getResumeRefreshArgs,
   resolveModel,
+  resolveModelAutoSwitchTargets,
 } from "./agent/model";
 import { updateAgentLLMConfig, updateAgentSystemPrompt } from "./agent/modify";
 import { resolveSkillSourcesSelection } from "./agent/skillSources";
@@ -906,6 +907,29 @@ export async function handleHeadlessCommand(
       // handle but have different settings (e.g., gpt-5.2-medium vs gpt-5.2-xhigh)
       const updateArgs = getModelUpdateArgs(model);
       agent = await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+
+      if (!values.toolset) {
+        const { forceToolsetSwitch } = await import("./tools/toolset");
+        const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+        await forceToolsetSwitch(autoTargets.toolset, agent.id);
+
+        if (!systemPromptPreset) {
+          const promptResult = await updateAgentSystemPrompt(
+            agent.id,
+            autoTargets.systemPromptId,
+          );
+          if (!promptResult.success || !promptResult.agent) {
+            console.error(
+              `Failed to update system prompt: ${promptResult.message}`,
+            );
+            process.exit(1);
+          }
+          agent = promptResult.agent;
+        }
+      }
+
+      // Refresh agent state after model update
+      agent = await client.agents.retrieve(agent.id);
     } else {
       const presetRefresh = getModelPresetUpdateForAgent(agent);
       if (presetRefresh) {

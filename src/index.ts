@@ -16,6 +16,7 @@ import {
   getModelUpdateArgs,
   getResumeRefreshArgs,
   resolveModel,
+  resolveModelAutoSwitchTargets,
 } from "./agent/model";
 import { updateAgentLLMConfig, updateAgentSystemPrompt } from "./agent/modify";
 import { resolveSkillSourcesSelection } from "./agent/skillSources";
@@ -251,6 +252,12 @@ function getModelForToolLoading(
     return "google/gemini-3-pro";
   }
   if (specifiedToolset === "default") {
+    return "anthropic/claude-sonnet-4";
+  }
+  if (specifiedModel) {
+    const target = resolveModelAutoSwitchTargets(specifiedModel).toolset;
+    if (target === "codex") return "openai/gpt-4";
+    if (target === "gemini") return "google/gemini-3-pro";
     return "anthropic/claude-sonnet-4";
   }
   // Otherwise, use the specified model (or undefined for auto-detection)
@@ -1749,11 +1756,28 @@ async function main(): Promise<void> {
             // Always apply model update - different model IDs can share the same
             // handle but have different settings (e.g., gpt-5.2-medium vs gpt-5.2-xhigh)
             const updateArgs = getModelUpdateArgs(model);
-            agent = await updateAgentLLMConfig(
-              agent.id,
-              modelHandle,
-              updateArgs,
-            );
+            agent = await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+
+            if (!toolset) {
+              const { forceToolsetSwitch } = await import("./tools/toolset");
+              const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+              await forceToolsetSwitch(autoTargets.toolset, agent.id);
+
+              if (!systemPromptPreset) {
+                const promptResult = await updateAgentSystemPrompt(
+                  agent.id,
+                  autoTargets.systemPromptId,
+                );
+                if (!promptResult.success || !promptResult.agent) {
+                  console.error(`Error: ${promptResult.message}`);
+                  process.exit(1);
+                }
+                agent = promptResult.agent;
+              }
+            }
+
+            // Refresh agent state after model update
+            agent = await client.agents.retrieve(agent.id);
           } else {
             const presetRefresh = getModelPresetUpdateForAgent(agent);
             if (presetRefresh) {
