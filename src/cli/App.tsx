@@ -62,6 +62,7 @@ import {
   getModelInfoForLlmConfig,
   getModelShortName,
   type ModelReasoningEffort,
+  resolveModelAutoSwitchTargets,
 } from "../agent/model";
 import {
   INTERRUPT_RECOVERY_ALERT,
@@ -12228,29 +12229,46 @@ ${SYSTEM_REMINDER_CLOSE}
             settingsManager.getToolsetPreference(agentId);
           const previousToolsetSnapshot = currentToolset;
           const previousToolNamesSnapshot = getToolNames();
+
           let toolsetNoticeLine: string | null = null;
+          let promptNoticeLine: string | null = null;
 
           if (persistedToolsetPreference === "auto") {
-            const { switchToolsetForModel } = await import("../tools/toolset");
-            const toolsetName = await switchToolsetForModel(
-              modelHandle,
-              agentId,
-            );
-            setCurrentToolsetPreference("auto");
-            setCurrentToolset(toolsetName);
-            // Only notify when the toolset actually changes (e.g., Claude → Codex)
-            if (toolsetName !== currentToolset) {
+            const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+            const targetToolset = autoTargets.toolset;
+            const targetSystemPromptId = autoTargets.systemPromptId;
+
+            if (currentToolset !== targetToolset) {
+              const { forceToolsetSwitch } = await import("../tools/toolset");
+              await forceToolsetSwitch(targetToolset, agentId);
+              setCurrentToolset(targetToolset);
               toolsetNoticeLine =
                 "Auto toolset selected: switched to " +
-                formatToolsetName(toolsetName) +
+                formatToolsetName(targetToolset) +
                 ". Use /toolset to set a manual override.";
               maybeRecordToolsetChangeReminder({
                 source: "/model (auto toolset)",
                 previousToolset: previousToolsetSnapshot,
-                newToolset: toolsetName,
+                newToolset: targetToolset,
                 previousTools: previousToolNamesSnapshot,
                 newTools: getToolNames(),
               });
+            }
+            setCurrentToolsetPreference("auto");
+
+            if (currentSystemPromptId !== targetSystemPromptId) {
+              const { updateAgentSystemPrompt } = await import("../agent/modify");
+              const promptResult = await updateAgentSystemPrompt(
+                agentId,
+                targetSystemPromptId,
+              );
+              if (!promptResult.success) {
+                throw new Error(promptResult.message);
+              }
+              setCurrentSystemPromptId(targetSystemPromptId);
+              promptNoticeLine =
+                `Auto system prompt selected: switched to ${targetSystemPromptId}. ` +
+                "Use /system to set a manual override.";
             }
           } else {
             const { forceToolsetSwitch } = await import("../tools/toolset");
@@ -12277,6 +12295,7 @@ ${SYSTEM_REMINDER_CLOSE}
               model.label +
               (reasoningLevel ? ` (${reasoningLevel} reasoning)` : ""),
             ...(toolsetNoticeLine ? [toolsetNoticeLine] : []),
+            ...(promptNoticeLine ? [promptNoticeLine] : []),
           ].join("\n");
 
           cmd.finish(outputLines, true);
@@ -12302,6 +12321,7 @@ ${SYSTEM_REMINDER_CLOSE}
       agentId,
       commandRunner,
       consumeOverlayCommand,
+      currentSystemPromptId,
       currentToolset,
       isAgentBusy,
       maybeRecordToolsetChangeReminder,

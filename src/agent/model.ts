@@ -88,6 +88,51 @@ export function resolveModel(modelIdentifier: string): string | null {
   return null;
 }
 
+export type AutoSwitchToolset = "codex" | "default" | "gemini";
+
+export type AutoSwitchSystemPromptId =
+  | "letta-claude"
+  | "letta-codex"
+  | "letta-gemini";
+
+export function resolveModelAutoSwitchTargets(
+  modelIdentifier: string | null | undefined,
+): {
+  toolset: AutoSwitchToolset;
+  systemPromptId: AutoSwitchSystemPromptId;
+} {
+  const normalized = new Set<string>();
+
+  const addCandidate = (value: string | null | undefined) => {
+    if (!value) return;
+    normalized.add(value.toLowerCase());
+  };
+
+  addCandidate(modelIdentifier);
+
+  if (modelIdentifier) {
+    const info = getModelInfo(modelIdentifier);
+    addCandidate(info?.id);
+    addCandidate(info?.handle);
+    addCandidate(resolveModel(modelIdentifier));
+  }
+
+  const candidates = Array.from(normalized);
+  const isGemini = candidates.some((value) => value.includes("gemini"));
+  if (isGemini) {
+    return { toolset: "gemini", systemPromptId: "letta-gemini" };
+  }
+
+  const isGptOrCodex = candidates.some(
+    (value) => value.includes("gpt") || value.includes("codex"),
+  );
+  if (isGptOrCodex) {
+    return { toolset: "codex", systemPromptId: "letta-codex" };
+  }
+
+  return { toolset: "default", systemPromptId: "letta-claude" };
+}
+
 /**
  * Get the default model handle
  */
