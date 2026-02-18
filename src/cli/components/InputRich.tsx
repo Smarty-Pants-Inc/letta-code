@@ -1042,16 +1042,12 @@ export function Input({
     if (!interactionEnabled) return;
 
     // Tab (no shift): cycle reasoning effort tiers for the current model (when idle).
-    // Only trigger when autocomplete is NOT active.
-    if (
-      key.tab &&
-      !key.shift &&
-      !isAutocompleteActive &&
-      !streaming &&
-      onCycleReasoningEffort
-    ) {
-      onCycleReasoningEffort();
-      return;
+    // Allow this even with non-empty input so users can adjust reasoning mid-prompt.
+    if (key.tab && !key.shift && !isAutocompleteActive && !streaming) {
+      if (onCycleReasoningEffort) {
+        onCycleReasoningEffort();
+        return;
+      }
     }
 
     // Debug logging for shift+tab detection
