@@ -12254,33 +12254,17 @@ ${SYSTEM_REMINDER_CLOSE}
       const currentEffort =
         deriveReasoningEffort(modelSettingsForEffort, current) ?? "none";
 
-      const { models } = await import("../agent/model");
-      const tiers = models
-        .filter((m) => m.handle === modelHandle)
-        .map((m) => {
-          const effort = (
-            m.updateArgs as { reasoning_effort?: unknown } | undefined
-          )?.reasoning_effort;
-          return {
-            id: m.id,
-            effort: typeof effort === "string" ? effort : null,
-          };
-        })
-        .filter((m): m is { id: string; effort: string } => Boolean(m.effort));
+      const { getReasoningTierOptionsForHandle } = await import(
+        "../agent/model"
+      );
+      const tiers = getReasoningTierOptionsForHandle(modelHandle);
 
       // Only enable cycling when there are multiple tiers for the same handle.
       if (tiers.length < 2) return;
 
-      const order = ["none", "minimal", "low", "medium", "high", "xhigh"];
-      const rank = (effort: string): number => {
-        const idx = order.indexOf(effort);
-        return idx >= 0 ? idx : 999;
-      };
-
-      const sorted = [...tiers].sort((a, b) => rank(a.effort) - rank(b.effort));
-      const curIndex = sorted.findIndex((t) => t.effort === currentEffort);
-      const nextIndex = (curIndex + 1) % sorted.length;
-      const next = sorted[nextIndex];
+      const curIndex = tiers.findIndex((t) => t.effort === currentEffort);
+      const nextIndex = (curIndex + 1) % tiers.length;
+      const next = tiers[nextIndex];
       if (!next) return;
 
       // Snapshot the last confirmed config once per burst so we can revert on failure.
