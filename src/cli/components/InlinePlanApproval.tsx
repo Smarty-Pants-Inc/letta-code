@@ -1,5 +1,9 @@
 import { Box, useInput } from "ink";
 import { memo, useMemo, useState } from "react";
+import {
+  getPlanApprovalOption,
+  PLAN_APPROVAL_OPTION_LABELS,
+} from "../helpers/planApproval";
 import { useProgressIndicator } from "../hooks/useProgressIndicator";
 import { useTerminalWidth } from "../hooks/useTerminalWidth";
 import { useTextInputCursor } from "../hooks/useTextInputCursor";
@@ -93,10 +97,11 @@ export const InlinePlanApproval = memo(
 
         // When on regular options
         if (key.return) {
-          if (selectedOption === 0) {
-            onApproveAndAcceptEdits();
-          } else if (selectedOption === 1) {
+          const option = getPlanApprovalOption(selectedOption);
+          if (option === "manual") {
             onApprove();
+          } else if (option === "autoAccept") {
+            onApproveAndAcceptEdits();
           }
           return;
         }
@@ -159,7 +164,7 @@ export const InlinePlanApproval = memo(
 
         {/* Options */}
         <Box marginTop={1} flexDirection="column">
-          {/* Option 1: Yes, and auto-accept edits */}
+          {/* Option 1: Yes, and manually approve edits */}
           <Box flexDirection="row">
             <Box width={5} flexShrink={0}>
               <Text
@@ -177,12 +182,12 @@ export const InlinePlanApproval = memo(
                   selectedOption === 0 ? colors.approval.header : undefined
                 }
               >
-                Yes, and auto-accept edits
+                {PLAN_APPROVAL_OPTION_LABELS.manual}
               </Text>
             </Box>
           </Box>
 
-          {/* Option 2: Yes, and manually approve edits */}
+          {/* Option 2: Yes, and auto-accept edits */}
           <Box flexDirection="row">
             <Box width={5} flexShrink={0}>
               <Text
@@ -200,7 +205,7 @@ export const InlinePlanApproval = memo(
                   selectedOption === 1 ? colors.approval.header : undefined
                 }
               >
-                Yes, and manually approve edits
+                {PLAN_APPROVAL_OPTION_LABELS.autoAccept}
               </Text>
             </Box>
           </Box>
