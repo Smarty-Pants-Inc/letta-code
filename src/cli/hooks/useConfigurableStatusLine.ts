@@ -199,10 +199,11 @@ export function useConfigurableStatusLine(
     if (!config) return;
 
     clearDebounceTimer();
+    const delayMs = Math.max(0, config.debounceMs);
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
       void executeNow();
-    }, config.debounceMs);
+    }, delayMs);
   }, [clearDebounceTimer, executeNow, resolveActiveConfig]);
 
   const triggerVersion = inputs.triggerVersion;
