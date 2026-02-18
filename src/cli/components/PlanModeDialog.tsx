@@ -1,6 +1,7 @@
 import { Box, useInput } from "ink";
 import { memo, useState } from "react";
 import { resolvePlaceholders } from "../helpers/pasteRegistry";
+import { PLAN_APPROVAL_OPTION_LABELS } from "../helpers/planApproval";
 import { useProgressIndicator } from "../hooks/useProgressIndicator";
 import { colors } from "./colors";
 import { MarkdownDisplay } from "./MarkdownDisplay";
@@ -50,8 +51,11 @@ export const PlanModeDialog = memo(
     useProgressIndicator();
 
     const options = [
-      { label: "Yes, and auto-accept edits", action: onApproveAndAcceptEdits },
-      { label: "Yes, and manually approve edits", action: onApprove },
+      { label: PLAN_APPROVAL_OPTION_LABELS.manual, action: onApprove },
+      {
+        label: PLAN_APPROVAL_OPTION_LABELS.autoAccept,
+        action: onApproveAndAcceptEdits,
+      },
       { label: "No, keep planning", action: () => {} }, // Handled via setIsEnteringReason
     ];
 
