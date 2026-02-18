@@ -276,7 +276,8 @@ const InputFooter = memo(function InputFooter({
     parts.push(" ".repeat(rightPrefixSpaces));
     parts.push(chalk.hex(colors.footer.agentName)(displayAgentName));
     parts.push(chalk.dim(" ["));
-    parts.push(chalk.dim(displayModel));
+    // Keep model label colorful even when statusline is enabled.
+    parts.push(chalk.hex(colors.selector.title)(displayModel));
     if (isByokProvider) {
       parts.push(chalk.dim(" "));
       parts.push(
