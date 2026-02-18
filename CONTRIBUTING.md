@@ -37,3 +37,29 @@ letta
 ```
 
 Whenever you change source files, rerun `bun run build` before using the linked `letta` binary so it picks up your edits.
+
+## Upstream PR hygiene (fork maintainers)
+
+When opening a PR to `letta-ai/letta-code`, always start from the upstream base branch:
+
+```bash
+git fetch upstream main
+git checkout -b <branch-name> upstream/main
+```
+
+Before creating the PR, verify only the intended commit(s) are on the branch:
+
+```bash
+git log --oneline upstream/main..HEAD
+```
+
+If this list includes unrelated fork commits, rebase/fix before opening the PR.
+
+When creating the PR with GitHub CLI, always pass explicit repo/base/head:
+
+```bash
+gh pr create \
+  --repo letta-ai/letta-code \
+  --base main \
+  --head <your-fork-owner>:<branch-name>
+```
