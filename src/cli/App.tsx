@@ -12276,7 +12276,7 @@ ${SYSTEM_REMINDER_CLOSE}
             : (agentStateRef.current ?? null);
       }
 
-      // Optimistic UI update (footer changes immediately).
+      // Optimistic UI update (footer/status line changes immediately).
       setLlmConfig((prev) =>
         prev ? ({ ...prev, reasoning_effort: next.effort } as LlmConfig) : prev,
       );
@@ -12327,6 +12327,7 @@ ${SYSTEM_REMINDER_CLOSE}
         reasoningCyclePatchedAgentStateRef.current = false;
       }
       setCurrentModelId(next.id);
+      triggerStatusLineRefresh();
 
       // Debounce the server update.
       reasoningCycleDesiredRef.current = {
@@ -12342,7 +12343,7 @@ ${SYSTEM_REMINDER_CLOSE}
         void flushPendingReasoningEffort();
       }, reasoningCycleDebounceMs);
     })();
-  }, [agentId, flushPendingReasoningEffort]);
+  }, [agentId, flushPendingReasoningEffort, triggerStatusLineRefresh]);
 
   const handlePlanApprove = useCallback(
     async (acceptEdits: boolean = false) => {
