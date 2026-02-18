@@ -12,6 +12,7 @@ import {
 import type { AgentProvenance } from "./agent/create";
 import { getLettaCodeHeaders } from "./agent/http-headers";
 import { ISOLATED_BLOCK_LABELS } from "./agent/memory";
+import { resolveModelAutoSwitchTargets } from "./agent/model";
 import { resolveSkillSourcesSelection } from "./agent/skillSources";
 import { LETTA_CLOUD_API_URL } from "./auth/oauth";
 import { ConversationSelector } from "./cli/components/ConversationSelector";
@@ -264,6 +265,12 @@ function getModelForToolLoading(
     return "google/gemini-3-pro";
   }
   if (specifiedToolset === "default") {
+    return "anthropic/claude-sonnet-4";
+  }
+  if (specifiedModel) {
+    const target = resolveModelAutoSwitchTargets(specifiedModel).toolset;
+    if (target === "codex") return "openai/gpt-4";
+    if (target === "gemini") return "google/gemini-3-pro";
     return "anthropic/claude-sonnet-4";
   }
   // Otherwise, use the specified model (or undefined for auto-detection)
@@ -994,7 +1001,7 @@ async function main(): Promise<void> {
     // For headless mode, load tools synchronously (respecting model/toolset when provided)
     const modelForTools = getModelForToolLoading(
       specifiedModel,
-      specifiedToolset as "codex" | "default" | undefined,
+      specifiedToolset as "codex" | "default" | "gemini" | undefined,
     );
     await loadTools(modelForTools);
     markMilestone("TOOLS_LOADED");
@@ -1819,6 +1826,27 @@ async function main(): Promise<void> {
             const { updateAgentLLMConfig } = await import("./agent/modify");
             const updateArgs = getModelUpdateArgs(model);
             await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+
+            if (!toolset) {
+              const { forceToolsetSwitch } = await import("./tools/toolset");
+              const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+              await forceToolsetSwitch(autoTargets.toolset, agent.id);
+
+              if (!systemPromptPreset) {
+                const { updateAgentSystemPrompt } = await import(
+                  "./agent/modify"
+                );
+                const promptResult = await updateAgentSystemPrompt(
+                  agent.id,
+                  autoTargets.systemPromptId,
+                );
+                if (!promptResult.success || !promptResult.agent) {
+                  console.error(`Error: ${promptResult.message}`);
+                  process.exit(1);
+                }
+              }
+            }
+
             // Refresh agent state after model update
             agent = await client.agents.retrieve(agent.id);
           }

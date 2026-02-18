@@ -26,7 +26,10 @@ import {
   LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
 } from "./agent/memory";
 import { sendMessageStream } from "./agent/message";
-import { getModelUpdateArgs } from "./agent/model";
+import {
+  getModelUpdateArgs,
+  resolveModelAutoSwitchTargets,
+} from "./agent/model";
 import { resolveSkillSourcesSelection } from "./agent/skillSources";
 import type { SkillSource } from "./agent/skills";
 import { SessionStats } from "./agent/stats";
@@ -969,6 +972,27 @@ export async function handleHeadlessCommand(
       const { updateAgentLLMConfig } = await import("./agent/modify");
       const updateArgs = getModelUpdateArgs(model);
       await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+
+      if (!values.toolset) {
+        const { forceToolsetSwitch } = await import("./tools/toolset");
+        const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+        await forceToolsetSwitch(autoTargets.toolset, agent.id);
+
+        if (!systemPromptPreset) {
+          const { updateAgentSystemPrompt } = await import("./agent/modify");
+          const promptResult = await updateAgentSystemPrompt(
+            agent.id,
+            autoTargets.systemPromptId,
+          );
+          if (!promptResult.success || !promptResult.agent) {
+            console.error(
+              `Failed to update system prompt: ${promptResult.message}`,
+            );
+            process.exit(1);
+          }
+        }
+      }
+
       // Refresh agent state after model update
       agent = await client.agents.retrieve(agent.id);
     }

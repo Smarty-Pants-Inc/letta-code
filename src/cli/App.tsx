@@ -52,7 +52,11 @@ import {
   getMemoryFilesystemRoot,
 } from "../agent/memoryFilesystem";
 import { sendMessageStream } from "../agent/message";
-import { getModelInfo, getModelShortName } from "../agent/model";
+import {
+  getModelInfo,
+  getModelShortName,
+  resolveModelAutoSwitchTargets,
+} from "../agent/model";
 import { INTERRUPT_RECOVERY_ALERT } from "../agent/promptAssets";
 import { SessionStats } from "../agent/stats";
 import {
@@ -85,8 +89,6 @@ import {
   analyzeToolApproval,
   checkToolPermission,
   executeTool,
-  isGeminiModel,
-  isOpenAIModel,
   savePermissionRule,
   type ToolExecutionResult,
 } from "../tools/manager";
@@ -204,6 +206,7 @@ import {
   clearPlaceholdersInText,
   resolvePlaceholders,
 } from "./helpers/pasteRegistry";
+import { resolvePlanExitMode } from "./helpers/planApproval";
 import { generatePlanFilePath } from "./helpers/planName";
 import {
   buildQueuedContentParts,
@@ -3040,11 +3043,8 @@ export default function App({
 
           // Derive toolset from agent's model (not persisted, computed on resume)
           if (agentModelHandle) {
-            const derivedToolset = isOpenAIModel(agentModelHandle)
-              ? "codex"
-              : isGeminiModel(agentModelHandle)
-                ? "gemini"
-                : "default";
+            const derivedToolset =
+              resolveModelAutoSwitchTargets(agentModelHandle).toolset;
             setCurrentToolset(derivedToolset);
           }
         } catch (error) {
@@ -10110,41 +10110,42 @@ ${SYSTEM_REMINDER_CLOSE}
           // Reset context token tracking since different models have different tokenizers
           resetContextHistory(contextTrackerRef.current);
 
-          const { isOpenAIModel, isGeminiModel } = await import(
-            "../tools/manager"
-          );
-          const targetToolset:
-            | "codex"
-            | "codex_snake"
-            | "default"
-            | "gemini"
-            | "gemini_snake"
-            | "none" = isOpenAIModel(modelHandle)
-            ? "codex"
-            : isGeminiModel(modelHandle)
-              ? "gemini"
-              : "default";
+          const autoTargets = resolveModelAutoSwitchTargets(modelHandle);
+          const targetToolset = autoTargets.toolset;
+          const targetSystemPromptId = autoTargets.systemPromptId;
 
-          let toolsetName:
-            | "codex"
-            | "codex_snake"
-            | "default"
-            | "gemini"
-            | "gemini_snake"
-            | "none"
-            | null = null;
+          let didSwitchToolset = false;
           if (currentToolset !== targetToolset) {
-            const { switchToolsetForModel } = await import("../tools/toolset");
-            toolsetName = await switchToolsetForModel(modelHandle, agentId);
-            setCurrentToolset(toolsetName);
+            const { forceToolsetSwitch } = await import("../tools/toolset");
+            await forceToolsetSwitch(targetToolset, agentId);
+            setCurrentToolset(targetToolset);
+            didSwitchToolset = true;
           }
 
-          const autoToolsetLine = toolsetName
-            ? `Automatically switched toolset to ${toolsetName}. Use /toolset to change back if desired.\nConsider switching to a different system prompt using /system to match.`
+          let didSwitchSystemPrompt = false;
+          if (currentSystemPromptId !== targetSystemPromptId) {
+            const { updateAgentSystemPrompt } = await import("../agent/modify");
+            const promptResult = await updateAgentSystemPrompt(
+              agentId,
+              targetSystemPromptId,
+            );
+            if (!promptResult.success) {
+              throw new Error(promptResult.message);
+            }
+            setCurrentSystemPromptId(targetSystemPromptId);
+            didSwitchSystemPrompt = true;
+          }
+
+          const autoToolsetLine = didSwitchToolset
+            ? `Automatically switched toolset to ${targetToolset}. Use /toolset to change back if desired.`
+            : null;
+          const autoPromptLine = didSwitchSystemPrompt
+            ? `Automatically switched system prompt to ${targetSystemPromptId}. Use /system to change back if desired.`
             : null;
           const outputLines = [
             `Switched to ${model.label}`,
             ...(autoToolsetLine ? [autoToolsetLine] : []),
+            ...(autoPromptLine ? [autoPromptLine] : []),
           ].join("\n");
 
           cmd.finish(outputLines, true);
@@ -10169,6 +10170,7 @@ ${SYSTEM_REMINDER_CLOSE}
       agentId,
       commandRunner,
       consumeOverlayCommand,
+      currentSystemPromptId,
       currentToolset,
       isAgentBusy,
       withCommandLock,
@@ -10917,9 +10919,10 @@ ${SYSTEM_REMINDER_CLOSE}
       lastPlanFilePathRef.current = planFilePath;
 
       // Exit plan mode
-      const restoreMode = acceptEdits
-        ? "acceptEdits"
-        : (permissionMode.getModeBeforePlan() ?? "default");
+      const restoreMode = resolvePlanExitMode(
+        acceptEdits,
+        permissionMode.getModeBeforePlan(),
+      );
       permissionMode.setMode(restoreMode);
       setUiPermissionMode(restoreMode);
 
