@@ -925,14 +925,17 @@ export default function App({
   const [networkPhase, setNetworkPhase] = useState<
     "upload" | "download" | "error" | null
   >(null);
-  // Track permission mode changes for UI updates
-  const [uiPermissionMode, setUiPermissionMode] = useState(
+  // Track permission mode changes for UI updates.
+  // Keep a ref in sync *synchronously* so async approval classification never
+  // reads a stale mode during the render/effect window.
+  const [uiPermissionMode, _setUiPermissionMode] = useState(
     permissionMode.getMode(),
   );
-  const uiPermissionModeRef = useRef(uiPermissionMode);
-  useEffect(() => {
-    uiPermissionModeRef.current = uiPermissionMode;
-  }, [uiPermissionMode]);
+  const uiPermissionModeRef = useRef<PermissionMode>(uiPermissionMode);
+  const setUiPermissionMode = useCallback((mode: PermissionMode) => {
+    uiPermissionModeRef.current = mode;
+    _setUiPermissionMode(mode);
+  }, []);
 
   const statusLineTriggerVersionRef = useRef(0);
   const [statusLineTriggerVersion, setStatusLineTriggerVersion] = useState(0);
@@ -4784,6 +4787,7 @@ export default function App({
       syncTrajectoryElapsedBase,
       closeTrajectorySegment,
       resetTrajectoryBases,
+      setUiPermissionMode,
     ],
   );
 
@@ -10420,7 +10424,7 @@ ${SYSTEM_REMINDER_CLOSE}
         setUiPermissionMode("default");
       }
     }
-  }, []);
+  }, [setUiPermissionMode]);
 
   // Handle permission mode changes from the Input component (e.g., shift+tab cycling)
   const handlePermissionModeChange = useCallback(
@@ -10434,7 +10438,7 @@ ${SYSTEM_REMINDER_CLOSE}
       setUiPermissionMode(mode);
       triggerStatusLineRefresh();
     },
-    [triggerStatusLineRefresh],
+    [triggerStatusLineRefresh, setUiPermissionMode],
   );
 
   const handlePlanApprove = useCallback(
@@ -10505,6 +10509,7 @@ ${SYSTEM_REMINDER_CLOSE}
       appendError,
       refreshDerived,
       setStreaming,
+      setUiPermissionMode,
     ],
   );
 
@@ -10727,7 +10732,13 @@ Plan file path: ${planFilePath}`;
     } else {
       setApprovalResults((prev) => [...prev, decision]);
     }
-  }, [pendingApprovals, approvalResults, sendAllResults, refreshDerived]);
+  }, [
+    pendingApprovals,
+    approvalResults,
+    sendAllResults,
+    refreshDerived,
+    setUiPermissionMode,
+  ]);
 
   const handleEnterPlanModeReject = useCallback(async () => {
     const currentIndex = approvalResults.length;
