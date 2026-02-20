@@ -161,7 +161,7 @@ const DEFAULT_SETTINGS: Settings = {
   tokenStreaming: false,
   reasoningTabCycleEnabled: false,
   tokenStreamingStyle: "typewriter-glow",
-  tokenStreamingRefreshIntervalMs: 33,
+  tokenStreamingRefreshIntervalMs: 16,
   tokenStreamingTypewriterCharsPerSecond: 300,
   tokenStreamingGlowChars: 18,
   tokenStreamingGlowFadeMs: 350,

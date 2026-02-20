@@ -18,7 +18,8 @@ export type TokenStreamingConfig = {
 const DEFAULT_CONFIG: TokenStreamingConfig = {
   enabled: false,
   style: "plain",
-  refreshIntervalMs: 33,
+  // 60fps cap by default for smoother typewriter/glow.
+  refreshIntervalMs: 16,
   typewriterCharsPerSecond: 300,
   glowChars: 18,
   glowFadeMs: 350,
