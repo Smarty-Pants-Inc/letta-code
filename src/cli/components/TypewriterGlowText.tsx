@@ -21,6 +21,79 @@ function computeMaxCharsPerTick(
   return 80;
 }
 
+function stripLeadingDoubleStarHeader(s: string): {
+  text: string;
+  boldUntil: number;
+} {
+  if (!s.startsWith("**")) return { text: s, boldUntil: 0 };
+
+  const nl = s.indexOf("\n");
+  const lineEnd = nl === -1 ? s.length : nl;
+  const line = s.slice(0, lineEnd);
+
+  // Remove the opening **.
+  const afterOpen = line.slice(2);
+  const closeIdx = afterOpen.indexOf("**");
+
+  if (closeIdx === -1) {
+    // No closing yet: render header without asterisks, keep it bold while streaming.
+    const outLine = afterOpen;
+    return { text: outLine + s.slice(lineEnd), boldUntil: outLine.length };
+  }
+
+  // Remove the first closing ** on the same line.
+  const outLine = afterOpen.slice(0, closeIdx) + afterOpen.slice(closeIdx + 2);
+  return { text: outLine + s.slice(lineEnd), boldUntil: closeIdx };
+}
+
+function renderSlice(
+  slice: string,
+  globalStart: number,
+  boldUntil: number,
+  dimColor: boolean | undefined,
+  color?: string,
+): Array<string | JSX.Element> {
+  if (!slice) return [];
+
+  const hasBold = boldUntil > globalStart;
+
+  const mk = (t: string, bold: boolean) => {
+    if (!t) return null;
+    if (!bold && !color) return t;
+    return (
+      <Text
+        key={`${globalStart}:${bold ? "b" : "n"}:${t.length}`}
+        bold={bold}
+        dimColor={dimColor}
+        color={color}
+      >
+        {t}
+      </Text>
+    );
+  };
+
+  if (!hasBold) {
+    const n = mk(slice, false);
+    return n ? [n] : [];
+  }
+
+  // Bold range is [0, boldUntil). Only need to split when this slice crosses it.
+  const boldCut = Math.min(slice.length, Math.max(0, boldUntil - globalStart));
+  if (boldCut >= slice.length) {
+    const b = mk(slice, true);
+    return b ? [b] : [];
+  }
+
+  const a = slice.slice(0, boldCut);
+  const b = slice.slice(boldCut);
+  const out: Array<string | JSX.Element> = [];
+  const na = mk(a, true);
+  const nb = mk(b, false);
+  if (na) out.push(na);
+  if (nb) out.push(nb);
+  return out;
+}
+
 /**
  * Streaming-only renderer.
  * - Reveals text at a controlled speed (typewriter).
@@ -245,10 +318,16 @@ export function TypewriterGlowText({
     return target.slice(0, clamp(visibleLen, 0, target.length));
   }, [immediate, target, visibleLen]);
 
+  // Render common "**Header**" pattern nicely during streaming (especially for reasoning).
+  const { text: displayTextStyled, boldUntil } = useMemo(
+    () => stripLeadingDoubleStarHeader(displayText),
+    [displayText],
+  );
+
   const glowChars = clamp(cfg.glowChars, 0, 200);
-  const glowStart = Math.max(0, displayText.length - glowChars);
-  const prefix = displayText.slice(0, glowStart);
-  const tail = displayText.slice(glowStart);
+  const glowStart = Math.max(0, displayTextStyled.length - glowChars);
+  const prefix = displayTextStyled.slice(0, glowStart);
+  const tail = displayTextStyled.slice(glowStart);
 
   // Split the glow tail into 3 segments so the highlight looks less "blocky".
   const aLen = Math.max(0, Math.floor(tail.length * 0.34));
@@ -268,18 +347,22 @@ export function TypewriterGlowText({
 
   return (
     <Text dimColor={dimColor} wrap="wrap">
-      {prefix}
-      {tailC ? <Text dimColor={dimColor}>{tailC}</Text> : null}
-      {tailB ? (
-        <Text dimColor={dimColor} color={tailBColor}>
-          {tailB}
-        </Text>
-      ) : null}
-      {tailA ? (
-        <Text dimColor={dimColor} color={tailAColor}>
-          {tailA}
-        </Text>
-      ) : null}
+      {renderSlice(prefix, 0, boldUntil, dimColor)}
+      {renderSlice(tailC, glowStart, boldUntil, dimColor)}
+      {renderSlice(
+        tailB,
+        glowStart + tailC.length,
+        boldUntil,
+        dimColor,
+        tailBColor,
+      )}
+      {renderSlice(
+        tailA,
+        glowStart + tailC.length + tailB.length,
+        boldUntil,
+        dimColor,
+        tailAColor,
+      )}
     </Text>
   );
 }
