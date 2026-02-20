@@ -183,6 +183,10 @@ import { UserMessage } from "./components/UserMessageRich";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { AnimationProvider } from "./contexts/AnimationContext";
 import {
+  TokenStreamingProvider,
+  type TokenStreamingStyle,
+} from "./contexts/StreamingTextContext";
+import {
   appendStreamingOutput,
   type Buffers,
   createBuffers,
@@ -975,6 +979,11 @@ export default function App({
   resumedExistingConversation = false,
   tokenStreaming = false,
   reasoningTabCycleEnabled: initialReasoningTabCycleEnabled = false,
+  tokenStreamingStyle,
+  tokenStreamingRefreshIntervalMs,
+  tokenStreamingTypewriterCharsPerSecond,
+  tokenStreamingGlowChars,
+  tokenStreamingGlowFadeMs,
   showCompactions = false,
   agentProvenance = null,
   releaseNotes = null,
@@ -997,6 +1006,11 @@ export default function App({
   resumedExistingConversation?: boolean; // True if we explicitly resumed via --resume
   tokenStreaming?: boolean;
   reasoningTabCycleEnabled?: boolean;
+  tokenStreamingStyle?: TokenStreamingStyle;
+  tokenStreamingRefreshIntervalMs?: number;
+  tokenStreamingTypewriterCharsPerSecond?: number;
+  tokenStreamingGlowChars?: number;
+  tokenStreamingGlowFadeMs?: number;
   showCompactions?: boolean;
   agentProvenance?: AgentProvenance | null;
   releaseNotes?: string | null; // Markdown release notes to display above header
@@ -1688,6 +1702,19 @@ export default function App({
   const [reasoningTabCycleEnabled, setReasoningTabCycleEnabled] = useState(
     initialReasoningTabCycleEnabled,
   );
+
+  // Streaming renderer configuration (persisted via settings).
+  const [streamingStyle, setStreamingStyle] = useState<TokenStreamingStyle>(
+    tokenStreamingStyle ?? "typewriter-glow",
+  );
+  const [streamingRefreshIntervalMs, setStreamingRefreshIntervalMs] = useState(
+    tokenStreamingRefreshIntervalMs ?? 33,
+  );
+  const [typewriterCharsPerSecond, setTypewriterCharsPerSecond] = useState(
+    tokenStreamingTypewriterCharsPerSecond ?? 300,
+  );
+  const [glowChars, setGlowChars] = useState(tokenStreamingGlowChars ?? 18);
+  const [glowFadeMs, setGlowFadeMs] = useState(tokenStreamingGlowFadeMs ?? 350);
 
   // Show compaction messages preference (can be toggled at runtime)
   const [showCompactionsEnabled, _setShowCompactionsEnabled] =
@@ -2976,21 +3003,24 @@ export default function App({
       buffersRef.current.pendingRefresh = true;
       // Capture the current generation to detect if resume invalidates this refresh
       const capturedGeneration = buffersRef.current.commitGeneration || 0;
-      setTimeout(() => {
-        buffersRef.current.pendingRefresh = false;
-        // Skip refresh if stream was interrupted - prevents stale updates appearing
-        // after user cancels. Normal stream completion still renders (interrupted=false).
-        // Also skip if commitGeneration changed - this means a resume is in progress and
-        // committing now would lock in the stale "Interrupted by user" state.
-        if (
-          !buffersRef.current.interrupted &&
-          (buffersRef.current.commitGeneration || 0) === capturedGeneration
-        ) {
-          refreshDerived();
-        }
-      }, 16); // ~60fps
+      setTimeout(
+        () => {
+          buffersRef.current.pendingRefresh = false;
+          // Skip refresh if stream was interrupted - prevents stale updates appearing
+          // after user cancels. Normal stream completion still renders (interrupted=false).
+          // Also skip if commitGeneration changed - this means a resume is in progress and
+          // committing now would lock in the stale "Interrupted by user" state.
+          if (
+            !buffersRef.current.interrupted &&
+            (buffersRef.current.commitGeneration || 0) === capturedGeneration
+          ) {
+            refreshDerived();
+          }
+        },
+        Math.max(16, Math.min(250, streamingRefreshIntervalMs)),
+      ); // bounded
     }
-  }, [refreshDerived]);
+  }, [refreshDerived, streamingRefreshIntervalMs]);
 
   // Restore pending approval from startup when ready
   // All approvals (including fancy UI tools) go through pendingApprovals
@@ -7956,36 +7986,128 @@ export default function App({
         }
 
         // Special handling for /stream command - toggle and save
-        if (msg.trim() === "/stream") {
-          const newValue = !tokenStreamingEnabled;
+        // Usage:
+        //   /stream
+        //   /stream on|off
+        //   /stream plain|typewriter|typewriter-glow
+        //   /stream rate <ms>
+        //   /stream speed <chars_per_sec>
+        //   /stream glow <chars>
+        //   /stream fade <ms>
+        //   /stream status
+        if (trimmed === "/stream" || trimmed.startsWith("/stream ")) {
+          const parts = trimmed.split(/\s+/);
+          const sub = (parts[1] || "").toLowerCase();
 
-          // Immediately add command to transcript with "running" phase and loading message
+          let nextEnabled = tokenStreamingEnabled;
+          let nextStyle: TokenStreamingStyle = streamingStyle;
+          let nextRateMs = streamingRefreshIntervalMs;
+          let nextCps = typewriterCharsPerSecond;
+          let nextGlow = glowChars;
+          let nextFade = glowFadeMs;
+
+          const usage =
+            "Usage: /stream [on|off|plain|typewriter] | /stream rate <ms> | /stream speed <cps> | /stream glow <chars> | /stream fade <ms> | /stream status";
+
+          if (!sub) {
+            nextEnabled = !tokenStreamingEnabled;
+          } else if (sub === "on" || sub === "enable") {
+            nextEnabled = true;
+          } else if (sub === "off" || sub === "disable") {
+            nextEnabled = false;
+          } else if (sub === "plain") {
+            nextEnabled = true;
+            nextStyle = "plain";
+          } else if (sub === "typewriter" || sub === "typewriter-glow") {
+            nextEnabled = true;
+            nextStyle = "typewriter-glow";
+          } else if (sub === "rate") {
+            const raw = parts[2];
+            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+            if (!Number.isFinite(parsed)) {
+              const cmd = commandRunner.start(trimmed, usage);
+              cmd.finish(usage, false);
+              return { submitted: true };
+            }
+            nextRateMs = Math.max(16, Math.min(250, parsed));
+          } else if (sub === "speed") {
+            const raw = parts[2];
+            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+            if (!Number.isFinite(parsed)) {
+              const cmd = commandRunner.start(trimmed, usage);
+              cmd.finish(usage, false);
+              return { submitted: true };
+            }
+            nextCps = Math.max(60, Math.min(2000, parsed));
+          } else if (sub === "glow") {
+            const raw = parts[2];
+            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+            if (!Number.isFinite(parsed)) {
+              const cmd = commandRunner.start(trimmed, usage);
+              cmd.finish(usage, false);
+              return { submitted: true };
+            }
+            nextGlow = Math.max(0, Math.min(200, parsed));
+          } else if (sub === "fade") {
+            const raw = parts[2];
+            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+            if (!Number.isFinite(parsed)) {
+              const cmd = commandRunner.start(trimmed, usage);
+              cmd.finish(usage, false);
+              return { submitted: true };
+            }
+            nextFade = Math.max(80, Math.min(2000, parsed));
+          } else if (sub === "status") {
+            const cmd = commandRunner.start(trimmed, "Streaming settings:");
+            cmd.finish(
+              [
+                `token streaming: ${tokenStreamingEnabled ? "on" : "off"}`,
+                `style: ${streamingStyle}`,
+                `rate: ${streamingRefreshIntervalMs}ms`,
+                `speed: ${typewriterCharsPerSecond} cps`,
+                `glow: ${glowChars} chars`,
+                `fade: ${glowFadeMs}ms`,
+              ].join("\n"),
+              true,
+            );
+            return { submitted: true };
+          } else {
+            const cmd = commandRunner.start(trimmed, usage);
+            cmd.finish(usage, false);
+            return { submitted: true };
+          }
+
           const cmd = commandRunner.start(
-            msg.trim(),
-            `${newValue ? "Enabling" : "Disabling"} token streaming...`,
+            trimmed,
+            "Updating streaming settings...",
           );
 
-          // Lock input during async operation
           setCommandRunning(true);
-
           try {
-            setTokenStreamingEnabled(newValue);
+            setTokenStreamingEnabled(nextEnabled);
+            setStreamingStyle(nextStyle);
+            setStreamingRefreshIntervalMs(nextRateMs);
+            setTypewriterCharsPerSecond(nextCps);
+            setGlowChars(nextGlow);
+            setGlowFadeMs(nextFade);
 
-            // Save to settings
-            const { settingsManager } = await import("../settings-manager");
-            settingsManager.updateSettings({ tokenStreaming: newValue });
+            settingsManager.updateSettings({
+              tokenStreaming: nextEnabled,
+              tokenStreamingStyle: nextStyle,
+              tokenStreamingRefreshIntervalMs: nextRateMs,
+              tokenStreamingTypewriterCharsPerSecond: nextCps,
+              tokenStreamingGlowChars: nextGlow,
+              tokenStreamingGlowFadeMs: nextFade,
+            });
 
-            // Update the same command with final result
             cmd.finish(
-              `Token streaming ${newValue ? "enabled" : "disabled"}`,
+              `Token streaming ${nextEnabled ? "enabled" : "disabled"} (style=${nextStyle}, rate=${nextRateMs}ms, speed=${nextCps}cps)`,
               true,
             );
           } catch (error) {
-            // Mark command as failed
             const errorDetails = formatErrorDetails(error, agentId);
             cmd.fail(`Failed: ${errorDetails}`);
           } finally {
-            // Unlock input
             setCommandRunning(false);
           }
           return { submitted: true };
@@ -12917,8 +13039,28 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
     trajectoryTokenDisplayRef.current = trajectoryTokenDisplay;
   }, [trajectoryTokenDisplay]);
 
+  const tokenStreamingConfig = useMemo(
+    () => ({
+      enabled: tokenStreamingEnabled,
+      style: streamingStyle,
+      refreshIntervalMs: streamingRefreshIntervalMs,
+      typewriterCharsPerSecond,
+      glowChars,
+      glowFadeMs,
+    }),
+    [
+      tokenStreamingEnabled,
+      streamingStyle,
+      streamingRefreshIntervalMs,
+      typewriterCharsPerSecond,
+      glowChars,
+      glowFadeMs,
+    ],
+  );
+
   return (
-    <Box key={resumeKey} flexDirection="column">
+    <TokenStreamingProvider config={tokenStreamingConfig}>
+      <Box key={resumeKey} flexDirection="column">
       <Static
         key={staticRenderEpoch}
         items={staticItems}
@@ -13175,438 +13317,843 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                     }
                     agentName={agentName ?? undefined}
                   />
-                </Box>
+                ) : item.kind === "subagent_group" ? (
+                  <SubagentGroupStatic agents={item.agents} />
+                ) : item.kind === "error" ? (
+                  <ErrorMessage line={item} />
+                ) : item.kind === "status" ? (
+                  <StatusMessage line={item} />
+                ) : item.kind === "event" ? (
+                  !showCompactionsEnabled &&
+                  item.eventType === "compaction" ? null : (
+                    <EventMessage line={item} />
+                  )
+                ) : item.kind === "separator" ? (
+                  <Box marginTop={1}>
+                    <Text dimColor>{"─".repeat(columns)}</Text>
+                  </Box>
+                ) : item.kind === "command" ? (
+                  <CommandMessage line={item} />
+                ) : item.kind === "bash_command" ? (
+                  <BashCommandMessage line={item} />
+                ) : item.kind === "trajectory_summary" ? (
+                  <TrajectorySummary line={item} />
+                ) : item.kind === "approval_preview" ? (
+                  <ApprovalPreview
+                    toolName={item.toolName}
+                    toolArgs={item.toolArgs}
+                    precomputedDiff={item.precomputedDiff}
+                    allDiffs={precomputedDiffsRef.current}
+                    planContent={item.planContent}
+                    planFilePath={item.planFilePath}
+                    toolCallId={item.toolCallId}
+                  />
+                ) : null}
+              </Box>
+            );
+          }}
+        </Static>
+
+        <Box flexDirection="column">
+          {/* Loading screen / intro text */}
+          {loadingState !== "ready" && (
+            <WelcomeScreen
+              loadingState={loadingState}
+              continueSession={continueSession}
+              agentState={agentState}
+            />
+          )}
+
+          {loadingState === "ready" && (
+            <>
+              {/* Transcript - wrapped in AnimationProvider for overflow-based animation control */}
+              <AnimationProvider shouldAnimate={shouldAnimate}>
+                {/* Show liveItems always - all approvals now render inline */}
+                {liveItems.length > 0 && (
+                  <Box flexDirection="column">
+                    {liveItems.map((ln) => {
+                      const isFileTool =
+                        ln.kind === "tool_call" &&
+                        ln.name &&
+                        (isFileEditTool(ln.name) ||
+                          isFileWriteTool(ln.name) ||
+                          isPatchTool(ln.name));
+                      const isApprovalTracked =
+                        ln.kind === "tool_call" &&
+                        ln.toolCallId &&
+                        (ln.toolCallId === currentApproval?.toolCallId ||
+                          pendingIds.has(ln.toolCallId) ||
+                          queuedIds.has(ln.toolCallId));
+                      if (isFileTool && !isApprovalTracked) {
+                        return null;
+                      }
+                      // Skip Task tools that don't have a pending approval
+                      // They render as empty Boxes (ToolCallMessage returns null for non-finished Task tools)
+                      // which causes N blank lines when N Task tools are called in parallel
+                      // Note: pendingIds doesn't include the ACTIVE approval (currentApproval),
+                      // so we must also check if this is the active approval
+                      if (
+                        ln.kind === "tool_call" &&
+                        ln.name &&
+                        isTaskTool(ln.name) &&
+                        ln.toolCallId &&
+                        !pendingIds.has(ln.toolCallId) &&
+                        ln.toolCallId !== currentApproval?.toolCallId
+                      ) {
+                        return null;
+                      }
+
+                      // Check if this tool call matches the current approval awaiting user input
+                      const matchesCurrentApproval =
+                        ln.kind === "tool_call" &&
+                        currentApproval &&
+                        ln.toolCallId === currentApproval.toolCallId;
+
+                      return (
+                        <Box key={ln.id} flexDirection="column" marginTop={1}>
+                          {matchesCurrentApproval ? (
+                            <ApprovalSwitch
+                              approval={currentApproval}
+                              onApprove={handleApproveCurrent}
+                              onApproveAlways={handleApproveAlways}
+                              onDeny={handleDenyCurrent}
+                              onCancel={handleCancelApprovals}
+                              onPlanApprove={handlePlanApprove}
+                              onPlanKeepPlanning={handlePlanKeepPlanning}
+                              onQuestionSubmit={handleQuestionSubmit}
+                              onEnterPlanModeApprove={
+                                handleEnterPlanModeApprove
+                              }
+                              onEnterPlanModeReject={handleEnterPlanModeReject}
+                              precomputedDiff={
+                                ln.toolCallId
+                                  ? precomputedDiffsRef.current.get(
+                                      ln.toolCallId,
+                                    )
+                                  : undefined
+                              }
+                              allDiffs={precomputedDiffsRef.current}
+                              isFocused={true}
+                              approveAlwaysText={
+                                currentApprovalContext?.approveAlwaysText
+                              }
+                              allowPersistence={
+                                currentApprovalContext?.allowPersistence ?? true
+                              }
+                              defaultScope={
+                                currentApprovalContext?.defaultScope === "user"
+                                  ? "session"
+                                  : (currentApprovalContext?.defaultScope ??
+                                    "project")
+                              }
+                              showPreview={showApprovalPreview}
+                            />
+                          ) : ln.kind === "user" ? (
+                            <UserMessage line={ln} prompt={statusLine.prompt} />
+                          ) : ln.kind === "reasoning" ? (
+                            <ReasoningMessage line={ln} />
+                          ) : ln.kind === "assistant" ? (
+                            <AssistantMessage line={ln} />
+                          ) : ln.kind === "tool_call" &&
+                            ln.toolCallId &&
+                            queuedIds.has(ln.toolCallId) ? (
+                            // Render stub for queued (decided but not executed) approval
+                            <PendingApprovalStub
+                              toolName={
+                                approvalMap.get(ln.toolCallId)?.toolName ||
+                                ln.name ||
+                                "Unknown"
+                              }
+                              description={stubDescriptions.get(ln.toolCallId)}
+                              decision={queuedDecisions.get(ln.toolCallId)}
+                            />
+                          ) : ln.kind === "tool_call" &&
+                            ln.toolCallId &&
+                            pendingIds.has(ln.toolCallId) ? (
+                            // Render stub for pending (undecided) approval
+                            <PendingApprovalStub
+                              toolName={
+                                approvalMap.get(ln.toolCallId)?.toolName ||
+                                ln.name ||
+                                "Unknown"
+                              }
+                              description={stubDescriptions.get(ln.toolCallId)}
+                            />
+                          ) : ln.kind === "tool_call" ? (
+                            <ToolCallMessage
+                              line={ln}
+                              precomputedDiffs={precomputedDiffsRef.current}
+                              lastPlanFilePath={lastPlanFilePathRef.current}
+                              isStreaming={streaming}
+                            />
+                          ) : ln.kind === "error" ? (
+                            <ErrorMessage line={ln} />
+                          ) : ln.kind === "status" ? (
+                            <StatusMessage line={ln} />
+                          ) : ln.kind === "event" ? (
+                            <EventMessage line={ln} />
+                          ) : ln.kind === "command" ? (
+                            <CommandMessage line={ln} />
+                          ) : ln.kind === "bash_command" ? (
+                            <BashCommandMessage line={ln} />
+                          ) : null}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                )}
+
+                {/* Fallback approval UI when backfill is disabled (no liveItems) */}
+                {liveItems.length === 0 && currentApproval && (
+                  <Box flexDirection="column">
+                    <ApprovalSwitch
+                      approval={currentApproval}
+                      onApprove={handleApproveCurrent}
+                      onApproveAlways={handleApproveAlways}
+                      onDeny={handleDenyCurrent}
+                      onCancel={handleCancelApprovals}
+                      onPlanApprove={handlePlanApprove}
+                      onPlanKeepPlanning={handlePlanKeepPlanning}
+                      onQuestionSubmit={handleQuestionSubmit}
+                      onEnterPlanModeApprove={handleEnterPlanModeApprove}
+                      onEnterPlanModeReject={handleEnterPlanModeReject}
+                      allDiffs={precomputedDiffsRef.current}
+                      isFocused={true}
+                      approveAlwaysText={
+                        currentApprovalContext?.approveAlwaysText
+                      }
+                      allowPersistence={
+                        currentApprovalContext?.allowPersistence ?? true
+                      }
+                      defaultScope={
+                        currentApprovalContext?.defaultScope === "user"
+                          ? "session"
+                          : (currentApprovalContext?.defaultScope ?? "project")
+                      }
+                      showPreview={showApprovalPreview}
+                    />
+                  </Box>
+                )}
+
+                {/* Subagent group display - shows running/completed subagents */}
+                <SubagentGroupDisplay />
+              </AnimationProvider>
+
+              {/* Exit stats - shown when exiting via double Ctrl+C */}
+              {showExitStats &&
+                (() => {
+                  const stats = sessionStatsRef.current.getSnapshot();
+                  return (
+                    <Box flexDirection="column" marginTop={1}>
+                      {/* Alien + Stats (3 lines) */}
+                      <Box>
+                        <Text color={colors.footer.agentName}>
+                          {" ▗▖▗▖   "}
+                        </Text>
+                        <Text dimColor>
+                          Total duration (API):{" "}
+                          {formatDuration(stats.totalApiMs)}
+                        </Text>
+                      </Box>
+                      <Box>
+                        <Text color={colors.footer.agentName}>
+                          {"▙█▜▛█▟  "}
+                        </Text>
+                        <Text dimColor>
+                          Total duration (wall):{" "}
+                          {formatDuration(stats.totalWallMs)}
+                        </Text>
+                      </Box>
+                      <Box>
+                        <Text color={colors.footer.agentName}>
+                          {"▝▜▛▜▛▘  "}
+                        </Text>
+                        <Text dimColor>
+                          Session usage: {stats.usage.stepCount} steps,{" "}
+                          {formatCompact(stats.usage.promptTokens)} input,{" "}
+                          {formatCompact(stats.usage.completionTokens)} output
+                        </Text>
+                      </Box>
+                      {/* Resume commands (no alien) */}
+                      <Box height={1} />
+                      <Text dimColor>Resume this agent with:</Text>
+                      <Text color={colors.link.url}>
+                        {/* Show -n "name" if agent has name and is pinned, otherwise --agent */}
+                        {agentName &&
+                        (settingsManager
+                          .getLocalPinnedAgents()
+                          .includes(agentId) ||
+                          settingsManager
+                            .getGlobalPinnedAgents()
+                            .includes(agentId))
+                          ? `letta -n "${agentName}"`
+                          : `letta --agent ${agentId}`}
+                      </Text>
+                      {/* Only show conversation hint if not on default (default is resumed automatically) */}
+                      {conversationId !== "default" && (
+                        <>
+                          <Box height={1} />
+                          <Text dimColor>Resume this conversation with:</Text>
+                          <Text color={colors.link.url}>
+                            {`letta --conv ${conversationId}`}
+                          </Text>
+                        </>
+                      )}
+                    </Box>
+                  );
+                })()}
+
+              {/* Input row - always mounted to preserve state */}
+              <Box marginTop={1}>
+                <Input
+                  visible={inputVisible}
+                  streaming={streaming}
+                  tokenCount={trajectoryTokenDisplay}
+                  elapsedBaseMs={liveTrajectoryElapsedBaseMs}
+                  thinkingMessage={thinkingMessage}
+                  onSubmit={onSubmit}
+                  onBashSubmit={handleBashSubmit}
+                  bashRunning={bashRunning}
+                  onBashInterrupt={handleBashInterrupt}
+                  inputEnabled={inputEnabled}
+                  collapseInputWhenDisabled={
+                    pendingApprovals.length > 0 || anySelectorOpen
+                  }
+                  permissionMode={uiPermissionMode}
+                  onPermissionModeChange={handlePermissionModeChange}
+                  onCycleReasoningEffort={handleCycleReasoningEffort}
+                  onExit={handleExit}
+                  onInterrupt={handleInterrupt}
+                  interruptRequested={interruptRequested}
+                  agentId={agentId}
+                  agentName={agentName}
+                  currentModel={currentModelDisplay}
+                  currentModelProvider={currentModelProvider}
+                  currentReasoningEffort={currentReasoningEffort}
+                  currentSystemPromptId={currentSystemPromptId}
+                  currentToolset={currentToolset}
+                  messageQueue={messageQueue}
+                  onEnterQueueEditMode={handleEnterQueueEditMode}
+                  onEscapeCancel={
+                    profileConfirmPending
+                      ? handleProfileEscapeCancel
+                      : undefined
+                  }
+                  ralphActive={uiRalphActive}
+                  ralphPending={pendingRalphConfig !== null}
+                  ralphPendingYolo={pendingRalphConfig?.isYolo ?? false}
+                  onRalphExit={handleRalphExit}
+                  conversationId={conversationId}
+                  onPasteError={handlePasteError}
+                  restoredInput={restoredInput}
+                  onRestoredInputConsumed={() => setRestoredInput(null)}
+                  networkPhase={networkPhase}
+                  terminalWidth={columns}
+                  shouldAnimate={shouldAnimate}
+                  statusLineText={statusLine.text || undefined}
+                  statusLineRight={statusLine.rightText || undefined}
+                  statusLinePadding={statusLine.padding || 0}
+                  statusLinePrompt={statusLine.prompt}
+                />
+              </Box>
+
+              {/* Model Selector - conditionally mounted as overlay */}
+              {activeOverlay === "model" &&
+                (modelReasoningPrompt ? (
+                  <ModelReasoningSelector
+                    modelLabel={modelReasoningPrompt.modelLabel}
+                    options={modelReasoningPrompt.options}
+                    initialModelId={modelReasoningPrompt.initialModelId}
+                    onSelect={(selectedModelId) => {
+                      setModelReasoningPrompt(null);
+                      void handleModelSelect(selectedModelId, null, {
+                        skipReasoningPrompt: true,
+                      });
+                    }}
+                    onCancel={() => setModelReasoningPrompt(null)}
+                  />
+                ) : (
+                  <ModelSelector
+                    currentModelId={currentModelId ?? undefined}
+                    onSelect={handleModelSelect}
+                    onCancel={closeOverlay}
+                    filterProvider={modelSelectorOptions.filterProvider}
+                    forceRefresh={modelSelectorOptions.forceRefresh}
+                    billingTier={billingTier ?? undefined}
+                    isSelfHosted={(() => {
+                      const settings = settingsManager.getSettings();
+                      const baseURL =
+                        process.env.LETTA_BASE_URL ||
+                        settings.env?.LETTA_BASE_URL ||
+                        "https://api.letta.com";
+                      return !baseURL.includes("api.letta.com");
+                    })()}
+                  />
+                ))}
+
+              {activeOverlay === "sleeptime" && (
+                <SleeptimeSelector
+                  initialSettings={getReflectionSettings()}
+                  memfsEnabled={settingsManager.isMemfsEnabled(agentId)}
+                  onSave={handleSleeptimeModeSelect}
+                  onCancel={closeOverlay}
+                />
               )}
 
-              {/* Subagent group display - shows running/completed subagents */}
-              <SubagentGroupDisplay />
-            </AnimationProvider>
+              {/* Provider Selector - for connecting BYOK providers */}
+              {activeOverlay === "connect" && (
+                <ProviderSelector
+                  onCancel={closeOverlay}
+                  onStartOAuth={async () => {
+                    const overlayCommand = consumeOverlayCommand("connect");
+                    // Close selector and start OAuth flow
+                    closeOverlay();
+                    const cmd =
+                      overlayCommand ??
+                      commandRunner.start("/connect", "Starting connection...");
+                    const {
+                      handleConnect,
+                      setActiveCommandId: setActiveConnectCommandId,
+                    } = await import("./commands/connect");
+                    setActiveConnectCommandId(cmd.id);
+                    try {
+                      await handleConnect(
+                        {
+                          buffersRef,
+                          refreshDerived,
+                          setCommandRunning,
+                          onCodexConnected: () => {
+                            setModelSelectorOptions({
+                              filterProvider: "chatgpt-plus-pro",
+                              forceRefresh: true,
+                            });
+                            startOverlayCommand(
+                              "model",
+                              "/model",
+                              "Opening model selector...",
+                              "Models dialog dismissed",
+                            );
+                            setActiveOverlay("model");
+                          },
+                        },
+                        "/connect codex",
+                      );
+                    } finally {
+                      setActiveConnectCommandId(null);
+                    }
+                  }}
+                />
+              )}
 
-            {/* Exit stats - shown when exiting via double Ctrl+C */}
-            {showExitStats &&
-              (() => {
-                const stats = sessionStatsRef.current.getSnapshot();
-                return (
-                  <Box flexDirection="column" marginTop={1}>
-                    {/* Alien + Stats (3 lines) */}
-                    <Box>
-                      <Text color={colors.footer.agentName}>{" ▗▖▗▖   "}</Text>
-                      <Text dimColor>
-                        Total duration (API): {formatDuration(stats.totalApiMs)}
-                      </Text>
-                    </Box>
-                    <Box>
-                      <Text color={colors.footer.agentName}>{"▙█▜▛█▟  "}</Text>
-                      <Text dimColor>
-                        Total duration (wall):{" "}
-                        {formatDuration(stats.totalWallMs)}
-                      </Text>
-                    </Box>
-                    <Box>
-                      <Text color={colors.footer.agentName}>{"▝▜▛▜▛▘  "}</Text>
-                      <Text dimColor>
-                        Session usage: {stats.usage.stepCount} steps,{" "}
-                        {formatCompact(stats.usage.promptTokens)} input,{" "}
-                        {formatCompact(stats.usage.completionTokens)} output
-                      </Text>
-                    </Box>
-                    {/* Resume commands (no alien) */}
-                    <Box height={1} />
-                    <Text dimColor>Resume this agent with:</Text>
-                    <Text color={colors.link.url}>
-                      {/* Show -n "name" if agent has name and is pinned, otherwise --agent */}
-                      {agentName &&
-                      (settingsManager
-                        .getLocalPinnedAgents()
-                        .includes(agentId) ||
-                        settingsManager
-                          .getGlobalPinnedAgents()
-                          .includes(agentId))
-                        ? `letta -n "${agentName}"`
-                        : `letta --agent ${agentId}`}
-                    </Text>
-                    {/* Only show conversation hint if not on default (default is resumed automatically) */}
-                    {conversationId !== "default" && (
-                      <>
-                        <Box height={1} />
-                        <Text dimColor>Resume this conversation with:</Text>
-                        <Text color={colors.link.url}>
-                          {`letta --conv ${conversationId}`}
-                        </Text>
-                      </>
-                    )}
-                  </Box>
-                );
-              })()}
+              {/* GitHub App Installer - setup Letta Code GitHub Action */}
+              {activeOverlay === "install-github-app" && (
+                <InstallGithubAppFlow
+                  onComplete={(result) => {
+                    const overlayCommand =
+                      consumeOverlayCommand("install-github-app");
+                    closeOverlay();
 
-            {/* Input row - always mounted to preserve state */}
-            <Box marginTop={1}>
-              <Input
-                visible={inputVisible}
-                streaming={streaming}
-                tokenCount={trajectoryTokenDisplay}
-                elapsedBaseMs={liveTrajectoryElapsedBaseMs}
-                thinkingMessage={thinkingMessage}
-                onSubmit={onSubmit}
-                onBashSubmit={handleBashSubmit}
-                bashRunning={bashRunning}
-                onBashInterrupt={handleBashInterrupt}
-                inputEnabled={inputEnabled}
-                collapseInputWhenDisabled={
-                  pendingApprovals.length > 0 || anySelectorOpen
-                }
-                permissionMode={uiPermissionMode}
-                onPermissionModeChange={handlePermissionModeChange}
-                onCycleReasoningEffort={
-                  reasoningTabCycleEnabled
-                    ? handleCycleReasoningEffort
-                    : undefined
-                }
-                onExit={handleExit}
-                onInterrupt={handleInterrupt}
-                interruptRequested={interruptRequested}
-                agentId={agentId}
-                agentName={agentName}
-                currentModel={currentModelDisplay}
-                currentModelProvider={currentModelProvider}
-                currentReasoningEffort={currentReasoningEffort}
-                messageQueue={queueDisplay}
-                onEnterQueueEditMode={handleEnterQueueEditMode}
-                onEscapeCancel={
-                  profileConfirmPending ? handleProfileEscapeCancel : undefined
-                }
-                ralphActive={uiRalphActive}
-                ralphPending={pendingRalphConfig !== null}
-                ralphPendingYolo={pendingRalphConfig?.isYolo ?? false}
-                onRalphExit={handleRalphExit}
-                conversationId={conversationId}
-                onPasteError={handlePasteError}
-                restoredInput={restoredInput}
-                onRestoredInputConsumed={() => setRestoredInput(null)}
-                networkPhase={networkPhase}
-                terminalWidth={chromeColumns}
-                shouldAnimate={shouldAnimate}
-                statusLineText={statusLine.text || undefined}
-                statusLineRight={statusLine.rightText || undefined}
-                statusLinePadding={statusLine.padding || 0}
-                statusLinePrompt={statusLine.prompt}
-                footerNotification={footerUpdateText}
-              />
-            </Box>
+                    const cmd =
+                      overlayCommand ??
+                      commandRunner.start(
+                        "/install-github-app",
+                        "Setting up Letta Code GitHub Action...",
+                      );
 
-            {/* Model Selector - conditionally mounted as overlay */}
-            {activeOverlay === "model" &&
-              (modelReasoningPrompt ? (
-                <ModelReasoningSelector
-                  modelLabel={modelReasoningPrompt.modelLabel}
-                  options={modelReasoningPrompt.options}
-                  initialModelId={modelReasoningPrompt.initialModelId}
-                  onSelect={(selectedModelId) => {
-                    setModelReasoningPrompt(null);
-                    void handleModelSelect(selectedModelId, null, {
-                      skipReasoningPrompt: true,
+                    if (!result.committed) {
+                      cmd.finish(
+                        [
+                          `Workflow already up to date for ${result.repo}.`,
+                          result.secretAction === "reused"
+                            ? "Using existing LETTA_API_KEY secret."
+                            : "Updated LETTA_API_KEY secret.",
+                          "No pull request needed.",
+                        ].join("\n"),
+                        true,
+                      );
+                      return;
+                    }
+
+                    const lines: string[] = [
+                      "Install GitHub App",
+                      "Success",
+                      "",
+                    ];
+                    lines.push("✓ GitHub Actions workflow created!");
+                    lines.push("");
+                    lines.push(
+                      result.secretAction === "reused"
+                        ? "✓ Using existing LETTA_API_KEY secret"
+                        : "✓ API key saved as LETTA_API_KEY secret",
+                    );
+                    if (result.agentId) {
+                      lines.push("");
+                      lines.push(`✓ Agent configured: ${result.agentId}`);
+                    }
+                    lines.push("");
+                    lines.push("Next steps:");
+
+                    if (result.pullRequestUrl) {
+                      lines.push(
+                        result.pullRequestCreateMode === "page-opened"
+                          ? "1. A pre-filled PR page has been created"
+                          : "1. A pull request has been created",
+                      );
+                      lines.push(
+                        "2. Merge the PR to enable Letta PR assistance",
+                      );
+                      lines.push(
+                        "3. Mention @letta-code in an issue or PR to test",
+                      );
+                      lines.push("");
+                      lines.push(`PR: ${result.pullRequestUrl}`);
+                      if (result.agentUrl) {
+                        lines.push(`Agent: ${result.agentUrl}`);
+                      }
+                    } else {
+                      lines.push(
+                        "1. Open a PR for the branch created by the installer",
+                      );
+                      lines.push(
+                        "2. Merge the PR to enable Letta PR assistance",
+                      );
+                      lines.push(
+                        "3. Mention @letta-code in an issue or PR to test",
+                      );
+                      lines.push("");
+                      lines.push(
+                        "Branch pushed but PR was not opened automatically. Run: gh pr create",
+                      );
+                    }
+                    cmd.finish(lines.join("\n"), true);
+                  }}
+                  onCancel={closeOverlay}
+                />
+              )}
+
+              {/* Toolset Selector - conditionally mounted as overlay */}
+              {activeOverlay === "toolset" && (
+                <ToolsetSelector
+                  currentToolset={currentToolset ?? undefined}
+                  currentPreference={currentToolsetPreference}
+                  onSelect={handleToolsetSelect}
+                  onCancel={closeOverlay}
+                />
+              )}
+
+              {/* System Prompt Selector - conditionally mounted as overlay */}
+              {activeOverlay === "system" && (
+                <SystemPromptSelector
+                  currentPromptId={currentSystemPromptId ?? undefined}
+                  onSelect={handleSystemPromptSelect}
+                  onCancel={closeOverlay}
+                />
+              )}
+
+              {/* Subagent Manager - for managing custom subagents */}
+              {activeOverlay === "subagent" && (
+                <SubagentManager onClose={closeOverlay} />
+              )}
+
+              {/* Agent Selector - for browsing/selecting agents */}
+              {activeOverlay === "resume" && (
+                <AgentSelector
+                  currentAgentId={agentId}
+                  onSelect={async (id) => {
+                    const overlayCommand = consumeOverlayCommand("resume");
+                    closeOverlay();
+                    await handleAgentSelect(id, {
+                      commandId: overlayCommand?.id,
                     });
                   }}
-                  onCancel={() => setModelReasoningPrompt(null)}
-                />
-              ) : (
-                <ModelSelector
-                  currentModelId={currentModelId ?? undefined}
-                  onSelect={handleModelSelect}
                   onCancel={closeOverlay}
-                  filterProvider={modelSelectorOptions.filterProvider}
-                  forceRefresh={modelSelectorOptions.forceRefresh}
-                  billingTier={billingTier ?? undefined}
-                  isSelfHosted={(() => {
-                    const settings = settingsManager.getSettings();
-                    const baseURL =
-                      process.env.LETTA_BASE_URL ||
-                      settings.env?.LETTA_BASE_URL ||
-                      "https://api.letta.com";
-                    return !baseURL.includes("api.letta.com");
-                  })()}
+                  onCreateNewAgent={() => {
+                    closeOverlay();
+                    setActiveOverlay("new");
+                  }}
                 />
-              ))}
+              )}
 
-            {activeOverlay === "sleeptime" && (
-              <SleeptimeSelector
-                initialSettings={getReflectionSettings()}
-                memfsEnabled={settingsManager.isMemfsEnabled(agentId)}
-                onSave={handleSleeptimeModeSelect}
-                onCancel={closeOverlay}
-              />
-            )}
+              {/* Conversation Selector - for resuming conversations */}
+              {activeOverlay === "conversations" && (
+                <ConversationSelector
+                  agentId={agentId}
+                  agentName={agentName ?? undefined}
+                  currentConversationId={conversationId}
+                  onSelect={async (convId, selectorContext) => {
+                    const overlayCommand =
+                      consumeOverlayCommand("conversations");
+                    closeOverlay();
 
-            {/* GitHub App Installer - setup Letta Code GitHub Action */}
-            {activeOverlay === "install-github-app" && (
-              <InstallGithubAppFlow
-                onComplete={(result) => {
-                  const overlayCommand =
-                    consumeOverlayCommand("install-github-app");
-                  closeOverlay();
-
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start(
-                      "/install-github-app",
-                      "Setting up Letta Code GitHub Action...",
-                    );
-
-                  if (!result.committed) {
-                    cmd.finish(
-                      [
-                        `Workflow already up to date for ${result.repo}.`,
-                        result.secretAction === "reused"
-                          ? "Using existing LETTA_API_KEY secret."
-                          : "Updated LETTA_API_KEY secret.",
-                        "No pull request needed.",
-                      ].join("\n"),
-                      true,
-                    );
-                    return;
-                  }
-
-                  const lines: string[] = ["Install GitHub App", "Success", ""];
-                  lines.push("✓ GitHub Actions workflow created!");
-                  lines.push("");
-                  lines.push(
-                    result.secretAction === "reused"
-                      ? "✓ Using existing LETTA_API_KEY secret"
-                      : "✓ API key saved as LETTA_API_KEY secret",
-                  );
-                  if (result.agentId) {
-                    lines.push("");
-                    lines.push(`✓ Agent configured: ${result.agentId}`);
-                  }
-                  lines.push("");
-                  lines.push("Next steps:");
-
-                  if (result.pullRequestUrl) {
-                    lines.push(
-                      result.pullRequestCreateMode === "page-opened"
-                        ? "1. A pre-filled PR page has been created"
-                        : "1. A pull request has been created",
-                    );
-                    lines.push("2. Merge the PR to enable Letta PR assistance");
-                    lines.push(
-                      "3. Mention @letta-code in an issue or PR to test",
-                    );
-                    lines.push("");
-                    lines.push(`PR: ${result.pullRequestUrl}`);
-                    if (result.agentUrl) {
-                      lines.push(`Agent: ${result.agentUrl}`);
+                    // Skip if already on this conversation
+                    if (convId === conversationId) {
+                      const cmd =
+                        overlayCommand ??
+                        commandRunner.start(
+                          "/resume",
+                          "Already on this conversation",
+                        );
+                      cmd.finish("Already on this conversation", true);
+                      return;
                     }
-                  } else {
-                    lines.push(
-                      "1. Open a PR for the branch created by the installer",
-                    );
-                    lines.push("2. Merge the PR to enable Letta PR assistance");
-                    lines.push(
-                      "3. Mention @letta-code in an issue or PR to test",
-                    );
-                    lines.push("");
-                    lines.push(
-                      "Branch pushed but PR was not opened automatically. Run: gh pr create",
-                    );
-                  }
-                  cmd.finish(lines.join("\n"), true);
-                }}
-                onCancel={closeOverlay}
-              />
-            )}
 
-            {/* Provider Selector - for connecting BYOK providers */}
-            {activeOverlay === "connect" && (
-              <ProviderSelector
-                onCancel={closeOverlay}
-                onStartOAuth={async () => {
-                  const overlayCommand = consumeOverlayCommand("connect");
-                  // Close selector and start OAuth flow
-                  closeOverlay();
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start("/connect", "Starting connection...");
-                  const {
-                    handleConnect,
-                    setActiveCommandId: setActiveConnectCommandId,
-                  } = await import("./commands/connect");
-                  setActiveConnectCommandId(cmd.id);
-                  try {
-                    await handleConnect(
-                      {
-                        buffersRef,
-                        refreshDerived,
-                        setCommandRunning,
-                        onCodexConnected: () => {
-                          setModelSelectorOptions({
-                            filterProvider: "chatgpt-plus-pro",
-                            forceRefresh: true,
-                          });
-                          startOverlayCommand(
-                            "model",
-                            "/model",
-                            "Opening model selector...",
-                            "Models dialog dismissed",
-                          );
-                          setActiveOverlay("model");
-                        },
-                      },
-                      "/connect codex",
-                    );
-                  } finally {
-                    setActiveConnectCommandId(null);
-                  }
-                }}
-              />
-            )}
+                    // If agent is busy, queue the switch for after end_turn
+                    if (isAgentBusy()) {
+                      const cmd =
+                        overlayCommand ??
+                        commandRunner.start(
+                          "/resume",
+                          "Conversation switch queued – will switch after current task completes",
+                        );
+                      cmd.update({
+                        output:
+                          "Conversation switch queued – will switch after current task completes",
+                        phase: "running",
+                      });
+                      setQueuedOverlayAction({
+                        type: "switch_conversation",
+                        conversationId: convId,
+                        commandId: cmd.id,
+                      });
+                      return;
+                    }
 
-            {/* Toolset Selector - conditionally mounted as overlay */}
-            {activeOverlay === "toolset" && (
-              <ToolsetSelector
-                currentToolset={currentToolset ?? undefined}
-                currentPreference={currentToolsetPreference}
-                onSelect={handleToolsetSelect}
-                onCancel={closeOverlay}
-              />
-            )}
+                    // Lock input for async operation
+                    setCommandRunning(true);
 
-            {/* System Prompt Selector - conditionally mounted as overlay */}
-            {activeOverlay === "system" && (
-              <SystemPromptSelector
-                currentPromptId={currentSystemPromptId ?? undefined}
-                onSelect={handleSystemPromptSelect}
-                onCancel={closeOverlay}
-              />
-            )}
-
-            {/* Subagent Manager - for managing custom subagents */}
-            {activeOverlay === "subagent" && (
-              <SubagentManager onClose={closeOverlay} />
-            )}
-
-            {/* Agent Selector - for browsing/selecting agents */}
-            {activeOverlay === "resume" && (
-              <AgentSelector
-                currentAgentId={agentId}
-                onSelect={async (id) => {
-                  const overlayCommand = consumeOverlayCommand("resume");
-                  closeOverlay();
-                  await handleAgentSelect(id, {
-                    commandId: overlayCommand?.id,
-                  });
-                }}
-                onCancel={closeOverlay}
-                onCreateNewAgent={() => {
-                  closeOverlay();
-                  setActiveOverlay("new");
-                }}
-              />
-            )}
-
-            {/* Conversation Selector - for resuming conversations */}
-            {activeOverlay === "conversations" && (
-              <ConversationSelector
-                agentId={agentId}
-                agentName={agentName ?? undefined}
-                currentConversationId={conversationId}
-                onSelect={async (convId, selectorContext) => {
-                  const overlayCommand = consumeOverlayCommand("conversations");
-                  closeOverlay();
-
-                  // Skip if already on this conversation
-                  if (convId === conversationId) {
+                    const inputCmd = "/resume";
                     const cmd =
                       overlayCommand ??
                       commandRunner.start(
-                        "/resume",
-                        "Already on this conversation",
-                      );
-                    cmd.finish("Already on this conversation", true);
-                    return;
-                  }
-
-                  // If agent is busy, queue the switch for after end_turn
-                  if (isAgentBusy()) {
-                    const cmd =
-                      overlayCommand ??
-                      commandRunner.start(
-                        "/resume",
-                        "Conversation switch queued – will switch after current task completes",
+                        inputCmd,
+                        "Switching conversation...",
                       );
                     cmd.update({
-                      output:
-                        "Conversation switch queued – will switch after current task completes",
+                      output: "Switching conversation...",
                       phase: "running",
                     });
-                    setQueuedOverlayAction({
-                      type: "switch_conversation",
-                      conversationId: convId,
-                      commandId: cmd.id,
+
+                    try {
+                      // Validate conversation exists BEFORE updating state
+                      // (getResumeData throws 404/422 for non-existent conversations)
+                      if (agentState) {
+                        const client = await getClient();
+                        const resumeData = await getResumeData(
+                          client,
+                          agentState,
+                          convId,
+                        );
+
+                        // Only update state after validation succeeds
+                        setConversationId(convId);
+
+                        pendingConversationSwitchRef.current = {
+                          origin: "resume-selector",
+                          conversationId: convId,
+                          isDefault: convId === "default",
+                          messageCount:
+                            selectorContext?.messageCount ??
+                            resumeData.messageHistory.length,
+                          summary: selectorContext?.summary,
+                          messageHistory: resumeData.messageHistory,
+                        };
+
+                        settingsManager.setLocalLastSession(
+                          { agentId, conversationId: convId },
+                          process.cwd(),
+                        );
+                        settingsManager.setGlobalLastSession({
+                          agentId,
+                          conversationId: convId,
+                        });
+
+                        // Build success command with agent + conversation info
+                        const currentAgentName =
+                          agentState.name || "Unnamed Agent";
+                        const successLines =
+                          resumeData.messageHistory.length > 0
+                            ? [
+                                `Resumed conversation with "${currentAgentName}"`,
+                                `⎿  Agent: ${agentId}`,
+                                `⎿  Conversation: ${convId}`,
+                              ]
+                            : [
+                                `Switched to conversation with "${currentAgentName}"`,
+                                `⎿  Agent: ${agentId}`,
+                                `⎿  Conversation: ${convId} (empty)`,
+                              ];
+                        const successOutput = successLines.join("\n");
+                        cmd.finish(successOutput, true);
+                        const successItem: StaticItem = {
+                          kind: "command",
+                          id: cmd.id,
+                          input: cmd.input,
+                          output: successOutput,
+                          phase: "finished",
+                          success: true,
+                        };
+
+                        // Clear current transcript and static items
+                        buffersRef.current.byId.clear();
+                        buffersRef.current.order = [];
+                        buffersRef.current.tokenCount = 0;
+                        resetContextHistory(contextTrackerRef.current);
+                        resetBootstrapReminderState();
+                        emittedIdsRef.current.clear();
+                        resetDeferredToolCallCommits();
+                        setStaticItems([]);
+                        setStaticRenderEpoch((e) => e + 1);
+                        resetTrajectoryBases();
+
+                        // Backfill message history with visual separator
+                        if (resumeData.messageHistory.length > 0) {
+                          hasBackfilledRef.current = false;
+                          backfillBuffers(
+                            buffersRef.current,
+                            resumeData.messageHistory,
+                          );
+                          // Collect backfilled items
+                          const backfilledItems: StaticItem[] = [];
+                          for (const id of buffersRef.current.order) {
+                            const ln = buffersRef.current.byId.get(id);
+                            if (!ln) continue;
+                            emittedIdsRef.current.add(id);
+                            backfilledItems.push({ ...ln } as StaticItem);
+                          }
+                          // Add separator before backfilled messages, then success at end
+                          const separator = {
+                            kind: "separator" as const,
+                            id: uid("sep"),
+                          };
+                          setStaticItems([
+                            separator,
+                            ...backfilledItems,
+                            successItem,
+                          ]);
+                          setLines(toLines(buffersRef.current));
+                          hasBackfilledRef.current = true;
+                        } else {
+                          // Add separator for visual spacing even without backfill
+                          const separator = {
+                            kind: "separator" as const,
+                            id: uid("sep"),
+                          };
+                          setStaticItems([separator, successItem]);
+                          setLines(toLines(buffersRef.current));
+                        }
+
+                        // Restore pending approvals if any (fixes #540 for ConversationSelector)
+                        if (resumeData.pendingApprovals.length > 0) {
+                          setPendingApprovals(resumeData.pendingApprovals);
+
+                          // Analyze approval contexts (same logic as startup)
+                          try {
+                            const contexts = await Promise.all(
+                              resumeData.pendingApprovals.map(
+                                async (approval) => {
+                                  const parsedArgs = safeJsonParseOr<
+                                    Record<string, unknown>
+                                  >(approval.toolArgs, {});
+                                  return await analyzeToolApproval(
+                                    approval.toolName,
+                                    parsedArgs,
+                                  );
+                                },
+                              ),
+                            );
+                            setApprovalContexts(contexts);
+                          } catch (approvalError) {
+                            // If analysis fails, leave context as null (will show basic options)
+                            console.error(
+                              "Failed to analyze resume approvals:",
+                              approvalError,
+                            );
+                          }
+                        }
+                      }
+                    } catch (error) {
+                      // Update existing loading message instead of creating new one
+                      // Format error message to be user-friendly (avoid raw JSON/internal details)
+                      let errorMsg = "Unknown error";
+                      if (error instanceof APIError) {
+                        if (error.status === 404) {
+                          errorMsg = "Conversation not found";
+                        } else if (error.status === 422) {
+                          errorMsg = "Invalid conversation ID";
+                        } else {
+                          errorMsg = error.message;
+                        }
+                      } else if (error instanceof Error) {
+                        errorMsg = error.message;
+                      }
+                      cmd.fail(`Failed to switch conversation: ${errorMsg}`);
+                    } finally {
+                      setCommandRunning(false);
+                    }
+                  }}
+                  onNewConversation={async () => {
+                    const overlayCommand =
+                      consumeOverlayCommand("conversations");
+                    closeOverlay();
+
+                    // Lock input for async operation
+                    setCommandRunning(true);
+
+                    const cmd =
+                      overlayCommand ??
+                      commandRunner.start(
+                        "/resume",
+                        "Creating new conversation...",
+                      );
+                    cmd.update({
+                      output: "Creating new conversation...",
+                      phase: "running",
                     });
-                    return;
-                  }
 
-                  // Lock input for async operation
-                  setCommandRunning(true);
-
-                  const inputCmd = "/resume";
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start(inputCmd, "Switching conversation...");
-                  cmd.update({
-                    output: "Switching conversation...",
-                    phase: "running",
-                  });
-
-                  try {
-                    // Validate conversation exists BEFORE updating state
-                    // (getResumeData throws 404/422 for non-existent conversations)
-                    if (agentState) {
+                    try {
+                      // Create a new conversation
                       const client = await getClient();
-                      const resumeData = await getResumeData(
+
+                      // Letta requires isolated block labels to exist on the base agent.
+                      const { ensureIsolatedBlockLabels } = await import(
+                        "../agent/isolatedBlocks"
+                      );
+                      await ensureIsolatedBlockLabels(
                         client,
-                        agentState,
-                        convId,
+                        agentId,
+                        ISOLATED_BLOCK_LABELS,
                       );
 
-                      // Only update state after validation succeeds
-                      setConversationId(convId);
+                      // Back-compat: older flows may still reference the legacy label.
+                      const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } =
+                        await import("../agent/memory");
+                      await ensureIsolatedBlockLabels(client, agentId, [
+                        LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
+                      ]);
 
-                      pendingConversationSwitchRef.current = {
-                        origin: "resume-selector",
-                        conversationId: convId,
-                        isDefault: convId === "default",
-                        messageCount:
-                          selectorContext?.messageCount ??
-                          resumeData.messageHistory.length,
-                        summary: selectorContext?.summary,
-                        messageHistory: resumeData.messageHistory,
-                      };
-
+                      const conversation = await client.conversations.create({
+                        agent_id: agentId,
+                        isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
+                      });
+                      setConversationId(conversation.id);
                       settingsManager.setLocalLastSession(
-                        { agentId, conversationId: convId },
+                        { agentId, conversationId: conversation.id },
                         process.cwd(),
                       );
                       settingsManager.setGlobalLastSession({
                         agentId,
-                        conversationId: convId,
+                        conversationId: conversation.id,
                       });
 
                       // Build success command with agent + conversation info
                       const currentAgentName =
-                        agentState.name || "Unnamed Agent";
-                      const successLines =
-                        resumeData.messageHistory.length > 0
-                          ? [
-                              `Resumed conversation with "${currentAgentName}"`,
-                              `⎿  Agent: ${agentId}`,
-                              `⎿  Conversation: ${convId}`,
-                            ]
-                          : [
-                              `Switched to conversation with "${currentAgentName}"`,
-                              `⎿  Agent: ${agentId}`,
-                              `⎿  Conversation: ${convId} (empty)`,
-                            ];
+                        agentState?.name || "Unnamed Agent";
+                      const shortConvId = conversation.id.slice(0, 20);
+                      const successLines = [
+                        `Started new conversation with "${currentAgentName}"`,
+                        `⎿  Agent: ${agentId}`,
+                        `⎿  Conversation: ${shortConvId}... (new)`,
+                      ];
                       const successOutput = successLines.join("\n");
                       cmd.finish(successOutput, true);
                       const successItem: StaticItem = {
@@ -13629,7 +14176,6 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                       setStaticItems([]);
                       setStaticRenderEpoch((e) => e + 1);
                       resetTrajectoryBases();
-
                       // Backfill message history with visual separator
                       if (resumeData.messageHistory.length > 0) {
                         hasBackfilledRef.current = false;
@@ -13850,329 +14396,377 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                         "/search",
                         "Already on this conversation",
                       );
-                    cmd.finish("Already on this conversation", true);
-                    return;
-                  }
+                    } finally {
+                      setCommandRunning(false);
+                    }
+                  }}
+                  onCancel={closeOverlay}
+                />
+              )}
 
-                  // Same agent, different conversation: switch conversation
-                  // (Reuses ConversationSelector's onSelect logic pattern)
-                  if (isAgentBusy()) {
+              {/* Message Search - conditionally mounted as overlay */}
+              {activeOverlay === "search" && (
+                <MessageSearch
+                  onClose={closeOverlay}
+                  initialQuery={searchQuery || undefined}
+                  agentId={agentId}
+                  conversationId={conversationId}
+                  onOpenConversation={async (
+                    targetAgentId,
+                    targetConvId,
+                    searchContext,
+                  ) => {
+                    const overlayCommand = consumeOverlayCommand("search");
+                    closeOverlay();
+
+                    // Different agent: use handleAgentSelect (which supports optional conversationId)
+                    if (targetAgentId !== agentId) {
+                      await handleAgentSelect(targetAgentId, {
+                        conversationId: targetConvId,
+                        commandId: overlayCommand?.id,
+                      });
+                      return;
+                    }
+
+                    // Normalize undefined/null to "default"
+                    const actualTargetConv = targetConvId || "default";
+
+                    // Same agent, same conversation: nothing to do
+                    if (actualTargetConv === conversationId) {
+                      const cmd =
+                        overlayCommand ??
+                        commandRunner.start(
+                          "/search",
+                          "Already on this conversation",
+                        );
+                      cmd.finish("Already on this conversation", true);
+                      return;
+                    }
+
+                    // Same agent, different conversation: switch conversation
+                    // (Reuses ConversationSelector's onSelect logic pattern)
+                    if (isAgentBusy()) {
+                      const cmd =
+                        overlayCommand ??
+                        commandRunner.start(
+                          "/search",
+                          "Conversation switch queued – will switch after current task completes",
+                        );
+                      cmd.update({
+                        output:
+                          "Conversation switch queued – will switch after current task completes",
+                        phase: "running",
+                      });
+                      setQueuedOverlayAction({
+                        type: "switch_conversation",
+                        conversationId: actualTargetConv,
+                        commandId: cmd.id,
+                      });
+                      return;
+                    }
+
+                    setCommandRunning(true);
                     const cmd =
                       overlayCommand ??
                       commandRunner.start(
                         "/search",
-                        "Conversation switch queued – will switch after current task completes",
+                        "Switching conversation...",
                       );
                     cmd.update({
-                      output:
-                        "Conversation switch queued – will switch after current task completes",
+                      output: "Switching conversation...",
                       phase: "running",
                     });
-                    setQueuedOverlayAction({
-                      type: "switch_conversation",
-                      conversationId: actualTargetConv,
-                      commandId: cmd.id,
-                    });
-                    return;
-                  }
 
-                  setCommandRunning(true);
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start("/search", "Switching conversation...");
-                  cmd.update({
-                    output: "Switching conversation...",
-                    phase: "running",
-                  });
-
-                  try {
-                    if (agentState) {
-                      const client = await getClient();
-                      const resumeData = await getResumeData(
-                        client,
-                        agentState,
-                        actualTargetConv,
-                      );
-
-                      setConversationId(actualTargetConv);
-
-                      pendingConversationSwitchRef.current = {
-                        origin: "search",
-                        conversationId: actualTargetConv,
-                        isDefault: actualTargetConv === "default",
-                        messageCount: resumeData.messageHistory.length,
-                        messageHistory: resumeData.messageHistory,
-                        searchQuery: searchContext?.query,
-                        searchMessage: searchContext?.message,
-                      };
-
-                      settingsManager.setLocalLastSession(
-                        { agentId, conversationId: actualTargetConv },
-                        process.cwd(),
-                      );
-                      settingsManager.setGlobalLastSession({
-                        agentId,
-                        conversationId: actualTargetConv,
-                      });
-
-                      const currentAgentName =
-                        agentState.name || "Unnamed Agent";
-                      const successOutput = [
-                        `Switched to conversation with "${currentAgentName}"`,
-                        `⎿  Conversation: ${actualTargetConv}`,
-                      ].join("\n");
-                      cmd.finish(successOutput, true);
-                      const successItem: StaticItem = {
-                        kind: "command",
-                        id: cmd.id,
-                        input: cmd.input,
-                        output: successOutput,
-                        phase: "finished",
-                        success: true,
-                      };
-
-                      // Clear current transcript and static items
-                      buffersRef.current.byId.clear();
-                      buffersRef.current.order = [];
-                      buffersRef.current.tokenCount = 0;
-                      resetContextHistory(contextTrackerRef.current);
-                      resetBootstrapReminderState();
-                      emittedIdsRef.current.clear();
-                      resetDeferredToolCallCommits();
-                      setStaticItems([]);
-                      setStaticRenderEpoch((e) => e + 1);
-                      resetTrajectoryBases();
-
-                      // Backfill message history
-                      if (resumeData.messageHistory.length > 0) {
-                        hasBackfilledRef.current = false;
-                        backfillBuffers(
-                          buffersRef.current,
-                          resumeData.messageHistory,
+                    try {
+                      if (agentState) {
+                        const client = await getClient();
+                        const resumeData = await getResumeData(
+                          client,
+                          agentState,
+                          actualTargetConv,
                         );
-                        const backfilledItems: StaticItem[] = [];
-                        for (const id of buffersRef.current.order) {
-                          const ln = buffersRef.current.byId.get(id);
-                          if (!ln) continue;
-                          emittedIdsRef.current.add(id);
-                          backfilledItems.push({ ...ln } as StaticItem);
-                        }
-                        const separator = {
-                          kind: "separator" as const,
-                          id: uid("sep"),
-                        };
-                        setStaticItems([
-                          separator,
-                          ...backfilledItems,
-                          successItem,
-                        ]);
-                        setLines(toLines(buffersRef.current));
-                        hasBackfilledRef.current = true;
-                      } else {
-                        const separator = {
-                          kind: "separator" as const,
-                          id: uid("sep"),
-                        };
-                        setStaticItems([separator, successItem]);
-                        setLines(toLines(buffersRef.current));
-                      }
 
-                      // Restore pending approvals if any
-                      if (resumeData.pendingApprovals.length > 0) {
-                        setPendingApprovals(resumeData.pendingApprovals);
-                        try {
-                          const contexts = await Promise.all(
-                            resumeData.pendingApprovals.map(
-                              async (approval) => {
-                                const parsedArgs = safeJsonParseOr<
-                                  Record<string, unknown>
-                                >(approval.toolArgs, {});
-                                return await analyzeToolApproval(
-                                  approval.toolName,
-                                  parsedArgs,
-                                );
-                              },
-                            ),
+                        setConversationId(actualTargetConv);
+
+                        pendingConversationSwitchRef.current = {
+                          origin: "search",
+                          conversationId: actualTargetConv,
+                          isDefault: actualTargetConv === "default",
+                          messageCount: resumeData.messageHistory.length,
+                          messageHistory: resumeData.messageHistory,
+                          searchQuery: searchContext?.query,
+                          searchMessage: searchContext?.message,
+                        };
+
+                        settingsManager.setLocalLastSession(
+                          { agentId, conversationId: actualTargetConv },
+                          process.cwd(),
+                        );
+                        settingsManager.setGlobalLastSession({
+                          agentId,
+                          conversationId: actualTargetConv,
+                        });
+
+                        const currentAgentName =
+                          agentState.name || "Unnamed Agent";
+                        const successOutput = [
+                          `Switched to conversation with "${currentAgentName}"`,
+                          `⎿  Conversation: ${actualTargetConv}`,
+                        ].join("\n");
+                        cmd.finish(successOutput, true);
+                        const successItem: StaticItem = {
+                          kind: "command",
+                          id: cmd.id,
+                          input: cmd.input,
+                          output: successOutput,
+                          phase: "finished",
+                          success: true,
+                        };
+
+                        // Clear current transcript and static items
+                        buffersRef.current.byId.clear();
+                        buffersRef.current.order = [];
+                        buffersRef.current.tokenCount = 0;
+                        resetContextHistory(contextTrackerRef.current);
+                        resetBootstrapReminderState();
+                        emittedIdsRef.current.clear();
+                        resetDeferredToolCallCommits();
+                        setStaticItems([]);
+                        setStaticRenderEpoch((e) => e + 1);
+                        resetTrajectoryBases();
+
+                        // Backfill message history
+                        if (resumeData.messageHistory.length > 0) {
+                          hasBackfilledRef.current = false;
+                          backfillBuffers(
+                            buffersRef.current,
+                            resumeData.messageHistory,
                           );
-                          setApprovalContexts(contexts);
-                        } catch {
-                          // If analysis fails, leave context as null
+                          const backfilledItems: StaticItem[] = [];
+                          for (const id of buffersRef.current.order) {
+                            const ln = buffersRef.current.byId.get(id);
+                            if (!ln) continue;
+                            emittedIdsRef.current.add(id);
+                            backfilledItems.push({ ...ln } as StaticItem);
+                          }
+                          const separator = {
+                            kind: "separator" as const,
+                            id: uid("sep"),
+                          };
+                          setStaticItems([
+                            separator,
+                            ...backfilledItems,
+                            successItem,
+                          ]);
+                          setLines(toLines(buffersRef.current));
+                          hasBackfilledRef.current = true;
+                        } else {
+                          const separator = {
+                            kind: "separator" as const,
+                            id: uid("sep"),
+                          };
+                          setStaticItems([separator, successItem]);
+                          setLines(toLines(buffersRef.current));
+                        }
+
+                        // Restore pending approvals if any
+                        if (resumeData.pendingApprovals.length > 0) {
+                          setPendingApprovals(resumeData.pendingApprovals);
+                          try {
+                            const contexts = await Promise.all(
+                              resumeData.pendingApprovals.map(
+                                async (approval) => {
+                                  const parsedArgs = safeJsonParseOr<
+                                    Record<string, unknown>
+                                  >(approval.toolArgs, {});
+                                  return await analyzeToolApproval(
+                                    approval.toolName,
+                                    parsedArgs,
+                                  );
+                                },
+                              ),
+                            );
+                            setApprovalContexts(contexts);
+                          } catch {
+                            // If analysis fails, leave context as null
+                          }
                         }
                       }
-                    }
-                  } catch (error) {
-                    let errorMsg = "Unknown error";
-                    if (error instanceof APIError) {
-                      if (error.status === 404) {
-                        errorMsg = "Conversation not found";
-                      } else if (error.status === 422) {
-                        errorMsg = "Invalid conversation ID";
-                      } else {
+                    } catch (error) {
+                      let errorMsg = "Unknown error";
+                      if (error instanceof APIError) {
+                        if (error.status === 404) {
+                          errorMsg = "Conversation not found";
+                        } else if (error.status === 422) {
+                          errorMsg = "Invalid conversation ID";
+                        } else {
+                          errorMsg = error.message;
+                        }
+                      } else if (error instanceof Error) {
                         errorMsg = error.message;
                       }
-                    } else if (error instanceof Error) {
-                      errorMsg = error.message;
+                      cmd.fail(`Failed: ${errorMsg}`);
+                    } finally {
+                      setCommandRunning(false);
                     }
-                    cmd.fail(`Failed: ${errorMsg}`);
-                  } finally {
-                    setCommandRunning(false);
-                  }
                 }}
               />
             )}
 
-            {/* Feedback Dialog - conditionally mounted as overlay */}
-            {activeOverlay === "feedback" && (
-              <FeedbackDialog
-                onSubmit={handleFeedbackSubmit}
-                onCancel={closeOverlay}
-                initialValue={feedbackPrefill}
-              />
-            )}
-
-            {/* Memory Viewer - conditionally mounted as overlay */}
-            {/* Use tree view for memfs-enabled agents, tab view otherwise */}
-            {activeOverlay === "memory" &&
-              (settingsManager.isMemfsEnabled(agentId) ? (
-                <MemfsTreeViewer
-                  agentId={agentId}
-                  agentName={agentState?.name}
-                  onClose={closeOverlay}
-                  conversationId={conversationId}
+              {/* Feedback Dialog - conditionally mounted as overlay */}
+              {activeOverlay === "feedback" && (
+                <FeedbackDialog
+                  onSubmit={handleFeedbackSubmit}
+                  onCancel={closeOverlay}
+                  initialValue={feedbackPrefill}
                 />
-              ) : (
-                <MemoryTabViewer
-                  blocks={agentState?.memory?.blocks || []}
-                  agentId={agentId}
-                  onClose={closeOverlay}
-                  conversationId={conversationId}
-                />
-              ))}
+              )}
 
-            {/* Memory sync conflict overlay removed - git-backed memory
+              {/* Memory Viewer - conditionally mounted as overlay */}
+              {/* Use tree view for memfs-enabled agents, tab view otherwise */}
+              {activeOverlay === "memory" &&
+                (settingsManager.isMemfsEnabled(agentId) ? (
+                  <MemfsTreeViewer
+                    agentId={agentId}
+                    onClose={closeOverlay}
+                    conversationId={conversationId}
+                  />
+                ) : (
+                  <MemoryTabViewer
+                    blocks={agentState?.memory?.blocks || []}
+                    agentId={agentId}
+                    onClose={closeOverlay}
+                    conversationId={conversationId}
+                  />
+                ))}
+
+              {/* Memory sync conflict overlay removed - git-backed memory
                 uses standard git merge conflicts resolved by the agent */}
 
-            {/* MCP Server Selector - conditionally mounted as overlay */}
-            {activeOverlay === "mcp" && (
-              <McpSelector
-                agentId={agentId}
-                onAdd={() => {
-                  // Switch to the MCP connect flow
-                  setActiveOverlay("mcp-connect");
-                }}
-                onCancel={closeOverlay}
-              />
-            )}
+              {/* MCP Server Selector - conditionally mounted as overlay */}
+              {activeOverlay === "mcp" && (
+                <McpSelector
+                  agentId={agentId}
+                  onAdd={() => {
+                    // Switch to the MCP connect flow
+                    setActiveOverlay("mcp-connect");
+                  }}
+                  onCancel={closeOverlay}
+                />
+              )}
 
-            {/* MCP Connect Flow - interactive TUI for OAuth connection */}
-            {activeOverlay === "mcp-connect" && (
-              <McpConnectFlow
-                onComplete={(serverName, serverId, toolCount) => {
-                  const overlayCommand = consumeOverlayCommand("mcp-connect");
-                  closeOverlay();
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start(
-                      "/mcp connect",
-                      "Connecting MCP server...",
-                    );
-                  cmd.finish(
-                    `Successfully created MCP server "${serverName}"\n` +
-                      `ID: ${serverId}\n` +
-                      `Discovered ${toolCount} tool${toolCount === 1 ? "" : "s"}\n` +
-                      "Open /mcp to attach or detach tools for this server.",
-                    true,
-                  );
-                }}
-                onCancel={closeOverlay}
-              />
-            )}
-
-            {/* Help Dialog - conditionally mounted as overlay */}
-            {activeOverlay === "help" && <HelpDialog onClose={closeOverlay} />}
-
-            {/* Skills Dialog - browse available skills */}
-            {activeOverlay === "skills" && (
-              <SkillsDialog onClose={closeOverlay} agentId={agentId} />
-            )}
-
-            {/* Hooks Manager - for managing hooks configuration */}
-            {activeOverlay === "hooks" && (
-              <HooksManager onClose={closeOverlay} agentId={agentId} />
-            )}
-
-            {/* New Agent Dialog - for naming new agent before creation */}
-            {activeOverlay === "new" && (
-              <NewAgentDialog
-                onSubmit={handleCreateNewAgent}
-                onCancel={closeOverlay}
-              />
-            )}
-
-            {/* Pin Dialog - for naming agent before pinning */}
-            {activeOverlay === "pin" && (
-              <PinDialog
-                currentName={agentName || ""}
-                local={pinDialogLocal}
-                onSubmit={async (newName) => {
-                  const overlayCommand = consumeOverlayCommand("pin");
-                  closeOverlay();
-                  setCommandRunning(true);
-
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start("/pin", "Pinning agent...");
-                  const scopeText = pinDialogLocal
-                    ? "to this project"
-                    : "globally";
-                  const displayName =
-                    newName || agentName || agentId.slice(0, 12);
-
-                  cmd.update({
-                    output: `Pinning "${displayName}" ${scopeText}...`,
-                    phase: "running",
-                  });
-
-                  try {
-                    const client = await getClient();
-
-                    // Rename if new name provided
-                    if (newName && newName !== agentName) {
-                      await client.agents.update(agentId, { name: newName });
-                      updateAgentName(newName);
-                    }
-
-                    // Pin the agent
-                    if (pinDialogLocal) {
-                      settingsManager.pinLocal(agentId);
-                    } else {
-                      settingsManager.pinGlobal(agentId);
-                    }
-
+              {/* MCP Connect Flow - interactive TUI for OAuth connection */}
+              {activeOverlay === "mcp-connect" && (
+                <McpConnectFlow
+                  onComplete={(serverName, serverId, toolCount) => {
+                    const overlayCommand = consumeOverlayCommand("mcp-connect");
+                    closeOverlay();
+                    const cmd =
+                      overlayCommand ??
+                      commandRunner.start(
+                        "/mcp connect",
+                        "Connecting MCP server...",
+                      );
                     cmd.finish(
-                      `Pinned "${newName || agentName || agentId.slice(0, 12)}" ${scopeText}.`,
+                      `Successfully created MCP server "${serverName}"\n` +
+                        `ID: ${serverId}\n` +
+                        `Discovered ${toolCount} tool${toolCount === 1 ? "" : "s"}\n` +
+                        "Open /mcp to attach or detach tools for this server.",
                       true,
                     );
-                  } catch (error) {
-                    cmd.fail(`Failed to pin: ${error}`);
-                  } finally {
-                    setCommandRunning(false);
-                    refreshDerived();
-                  }
-                }}
-                onCancel={closeOverlay}
-              />
-            )}
+                  }}
+                  onCancel={closeOverlay}
+                />
+              )}
 
-            {/* Plan Mode Dialog - NOW RENDERED INLINE with tool call (see liveItems above) */}
-            {/* ExitPlanMode approval is handled by InlinePlanApproval component */}
+              {/* Help Dialog - conditionally mounted as overlay */}
+              {activeOverlay === "help" && (
+                <HelpDialog onClose={closeOverlay} />
+              )}
 
-            {/* AskUserQuestion now rendered inline via InlineQuestionApproval */}
-            {/* EnterPlanMode now rendered inline in liveItems above */}
-            {/* ApprovalDialog removed - all approvals now render inline via InlineGenericApproval fallback */}
-          </>
-        )}
+              {/* Skills Dialog - browse available skills */}
+              {activeOverlay === "skills" && (
+                <SkillsDialog onClose={closeOverlay} agentId={agentId} />
+              )}
+
+              {/* Hooks Manager - for managing hooks configuration */}
+              {activeOverlay === "hooks" && (
+                <HooksManager onClose={closeOverlay} agentId={agentId} />
+              )}
+
+              {/* New Agent Dialog - for naming new agent before creation */}
+              {activeOverlay === "new" && (
+                <NewAgentDialog
+                  onSubmit={handleCreateNewAgent}
+                  onCancel={closeOverlay}
+                />
+              )}
+
+              {/* Pin Dialog - for naming agent before pinning */}
+              {activeOverlay === "pin" && (
+                <PinDialog
+                  currentName={agentName || ""}
+                  local={pinDialogLocal}
+                  onSubmit={async (newName) => {
+                    const overlayCommand = consumeOverlayCommand("pin");
+                    closeOverlay();
+                    setCommandRunning(true);
+
+                    const cmd =
+                      overlayCommand ??
+                      commandRunner.start("/pin", "Pinning agent...");
+                    const scopeText = pinDialogLocal
+                      ? "to this project"
+                      : "globally";
+                    const displayName =
+                      newName || agentName || agentId.slice(0, 12);
+
+                    cmd.update({
+                      output: `Pinning "${displayName}" ${scopeText}...`,
+                      phase: "running",
+                    });
+
+                    try {
+                      const client = await getClient();
+
+                      // Rename if new name provided
+                      if (newName && newName !== agentName) {
+                        await client.agents.update(agentId, { name: newName });
+                        updateAgentName(newName);
+                      }
+
+                      // Pin the agent
+                      if (pinDialogLocal) {
+                        settingsManager.pinLocal(agentId);
+                      } else {
+                        settingsManager.pinGlobal(agentId);
+                      }
+
+                      cmd.finish(
+                        `Pinned "${newName || agentName || agentId.slice(0, 12)}" ${scopeText}.`,
+                        true,
+                      );
+                    } catch (error) {
+                      cmd.fail(`Failed to pin: ${error}`);
+                    } finally {
+                      setCommandRunning(false);
+                      refreshDerived();
+                    }
+                  }}
+                  onCancel={closeOverlay}
+                />
+              )}
+
+              {/* Plan Mode Dialog - NOW RENDERED INLINE with tool call (see liveItems above) */}
+              {/* ExitPlanMode approval is handled by InlinePlanApproval component */}
+
+              {/* AskUserQuestion now rendered inline via InlineQuestionApproval */}
+              {/* EnterPlanMode now rendered inline in liveItems above */}
+              {/* ApprovalDialog removed - all approvals now render inline via InlineGenericApproval fallback */}
+            </>
+          )}
+        </Box>
       </Box>
-    </Box>
+    </TokenStreamingProvider>
   );
 }
