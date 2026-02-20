@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAnimation } from "../contexts/AnimationContext.js";
 import { useTokenStreamingConfig } from "../contexts/StreamingTextContext";
+import {
+  type BoldSpan,
+  formatStreamingHeaders,
+} from "../helpers/streamingHeaderFormat";
 import { colors } from "./colors.js";
 import { Text } from "./Text";
 
@@ -21,41 +25,35 @@ function computeMaxCharsPerTick(
   return 80;
 }
 
-function stripLeadingDoubleStarHeader(s: string): {
-  text: string;
-  boldUntil: number;
-} {
-  if (!s.startsWith("**")) return { text: s, boldUntil: 0 };
-
-  const nl = s.indexOf("\n");
-  const lineEnd = nl === -1 ? s.length : nl;
-  const line = s.slice(0, lineEnd);
-
-  // Remove the opening **.
-  const afterOpen = line.slice(2);
-  const closeIdx = afterOpen.indexOf("**");
-
-  if (closeIdx === -1) {
-    // No closing yet: render header without asterisks, keep it bold while streaming.
-    const outLine = afterOpen;
-    return { text: outLine + s.slice(lineEnd), boldUntil: outLine.length };
-  }
-
-  // Remove the first closing ** on the same line.
-  const outLine = afterOpen.slice(0, closeIdx) + afterOpen.slice(closeIdx + 2);
-  return { text: outLine + s.slice(lineEnd), boldUntil: closeIdx };
-}
-
 function renderSlice(
   slice: string,
   globalStart: number,
-  boldUntil: number,
+  boldSpans: BoldSpan[],
   dimColor: boolean | undefined,
   color?: string,
 ): Array<string | JSX.Element> {
   if (!slice) return [];
 
-  const hasBold = boldUntil > globalStart;
+  const sliceStart = globalStart;
+  const sliceEnd = globalStart + slice.length;
+  const intersections: Array<{ start: number; end: number }> = [];
+  for (const s of boldSpans) {
+    const a = Math.max(sliceStart, s.start);
+    const b = Math.min(sliceEnd, s.end);
+    if (a < b) intersections.push({ start: a, end: b });
+  }
+  intersections.sort((a, b) => a.start - b.start);
+
+  // Merge overlaps.
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const s of intersections) {
+    const last = merged[merged.length - 1];
+    if (!last || s.start > last.end) {
+      merged.push({ start: s.start, end: s.end });
+    } else {
+      last.end = Math.max(last.end, s.end);
+    }
+  }
 
   const mk = (t: string, bold: boolean) => {
     if (!t) return null;
@@ -72,25 +70,29 @@ function renderSlice(
     );
   };
 
-  if (!hasBold) {
+  if (merged.length === 0) {
     const n = mk(slice, false);
     return n ? [n] : [];
   }
 
-  // Bold range is [0, boldUntil). Only need to split when this slice crosses it.
-  const boldCut = Math.min(slice.length, Math.max(0, boldUntil - globalStart));
-  if (boldCut >= slice.length) {
-    const b = mk(slice, true);
-    return b ? [b] : [];
+  const out: Array<string | JSX.Element> = [];
+  let cursor = 0;
+  for (const span of merged) {
+    const a = Math.max(0, span.start - sliceStart);
+    const b = Math.max(0, span.end - sliceStart);
+
+    const before = slice.slice(cursor, a);
+    const bold = slice.slice(a, b);
+    const nb = mk(before, false);
+    const bb = mk(bold, true);
+    if (nb) out.push(nb);
+    if (bb) out.push(bb);
+    cursor = b;
   }
 
-  const a = slice.slice(0, boldCut);
-  const b = slice.slice(boldCut);
-  const out: Array<string | JSX.Element> = [];
-  const na = mk(a, true);
-  const nb = mk(b, false);
+  const after = slice.slice(cursor);
+  const na = mk(after, false);
   if (na) out.push(na);
-  if (nb) out.push(nb);
   return out;
 }
 
@@ -319,8 +321,8 @@ export function TypewriterGlowText({
   }, [immediate, target, visibleLen]);
 
   // Render common "**Header**" pattern nicely during streaming (especially for reasoning).
-  const { text: displayTextStyled, boldUntil } = useMemo(
-    () => stripLeadingDoubleStarHeader(displayText),
+  const { text: displayTextStyled, boldSpans } = useMemo(
+    () => formatStreamingHeaders(displayText),
     [displayText],
   );
 
@@ -343,23 +345,29 @@ export function TypewriterGlowText({
       : fadePhase === 1
         ? colors.status.processing
         : undefined;
-  const tailBColor = fadePhase === 0 ? colors.status.processing : undefined;
+  const tailBColor =
+    fadePhase === 0
+      ? colors.status.processing
+      : fadePhase === 1
+        ? colors.tool.streaming
+        : undefined;
+  const tailCColor = fadePhase === 0 ? colors.tool.streaming : undefined;
 
   return (
     <Text dimColor={dimColor} wrap="wrap">
-      {renderSlice(prefix, 0, boldUntil, dimColor)}
-      {renderSlice(tailC, glowStart, boldUntil, dimColor)}
+      {renderSlice(prefix, 0, boldSpans, dimColor)}
+      {renderSlice(tailC, glowStart, boldSpans, dimColor, tailCColor)}
       {renderSlice(
         tailB,
         glowStart + tailC.length,
-        boldUntil,
+        boldSpans,
         dimColor,
         tailBColor,
       )}
       {renderSlice(
         tailA,
         glowStart + tailC.length + tailB.length,
-        boldUntil,
+        boldSpans,
         dimColor,
         tailAColor,
       )}
