@@ -2128,6 +2128,13 @@ async function main(): Promise<void> {
         resumedExistingConversation,
         tokenStreaming: settings.tokenStreaming,
         reasoningTabCycleEnabled: settings.reasoningTabCycleEnabled === true,
+        tokenStreamingStyle: settings.tokenStreamingStyle,
+        tokenStreamingRefreshIntervalMs:
+          settings.tokenStreamingRefreshIntervalMs,
+        tokenStreamingTypewriterCharsPerSecond:
+          settings.tokenStreamingTypewriterCharsPerSecond,
+        tokenStreamingGlowChars: settings.tokenStreamingGlowChars,
+        tokenStreamingGlowFadeMs: settings.tokenStreamingGlowFadeMs,
         showCompactions: settings.showCompactions,
         agentProvenance,
         releaseNotes,
@@ -2147,6 +2154,12 @@ async function main(): Promise<void> {
       resumedExistingConversation,
       tokenStreaming: settings.tokenStreaming,
       reasoningTabCycleEnabled: settings.reasoningTabCycleEnabled === true,
+      tokenStreamingStyle: settings.tokenStreamingStyle,
+      tokenStreamingRefreshIntervalMs: settings.tokenStreamingRefreshIntervalMs,
+      tokenStreamingTypewriterCharsPerSecond:
+        settings.tokenStreamingTypewriterCharsPerSecond,
+      tokenStreamingGlowChars: settings.tokenStreamingGlowChars,
+      tokenStreamingGlowFadeMs: settings.tokenStreamingGlowFadeMs,
       showCompactions: settings.showCompactions,
       agentProvenance,
       releaseNotes,

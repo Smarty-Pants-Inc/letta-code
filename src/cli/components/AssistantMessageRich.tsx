@@ -1,8 +1,10 @@
 import { Box } from "ink";
 import { memo } from "react";
+import { useTokenStreamingConfig } from "../contexts/StreamingTextContext";
 import { useTerminalWidth } from "../hooks/useTerminalWidth";
 import { MarkdownDisplay } from "./MarkdownDisplay.js";
 import { Text } from "./Text";
+import { TypewriterGlowText } from "./TypewriterGlowText";
 
 // Helper function to normalize text - copied from old codebase
 // NOTE: Less aggressive than before to preserve spacing when content is split across chunks
@@ -33,11 +35,17 @@ type AssistantLine = {
 export const AssistantMessage = memo(({ line }: { line: AssistantLine }) => {
   const columns = useTerminalWidth();
   const contentWidth = Math.max(0, columns - 2);
+  const streamCfg = useTokenStreamingConfig();
 
   const normalizedText = normalize(line.text);
   if (!normalizedText.trim()) {
     return null;
   }
+
+  const useTypewriterGlow =
+    line.phase === "streaming" &&
+    streamCfg.enabled &&
+    streamCfg.style === "typewriter-glow";
 
   return (
     <Box flexDirection="row">
@@ -45,7 +53,11 @@ export const AssistantMessage = memo(({ line }: { line: AssistantLine }) => {
         <Text>{line.isContinuation ? " " : "●"}</Text>
       </Box>
       <Box flexGrow={1} width={contentWidth}>
-        <MarkdownDisplay text={normalizedText} hangingIndent={0} />
+        {useTypewriterGlow ? (
+          <TypewriterGlowText text={normalizedText} />
+        ) : (
+          <MarkdownDisplay text={normalizedText} hangingIndent={0} />
+        )}
       </Box>
     </Box>
   );

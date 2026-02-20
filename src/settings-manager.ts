@@ -64,6 +64,20 @@ export interface Settings {
   lastSession?: SessionRef; // DEPRECATED: kept for backwards compat, use sessionsByServer
   tokenStreaming: boolean;
   reasoningTabCycleEnabled: boolean; // Tab cycles reasoning tiers only when explicitly enabled
+  /**
+   * How streaming text is rendered in the TUI.
+   * - plain: show token deltas as they arrive
+   * - typewriter-glow: animate reveal + highlight newest letters
+   */
+  tokenStreamingStyle?: "plain" | "typewriter-glow";
+  /** Max refresh rate for streaming UI (ms). Lower = smoother, higher = less CPU. */
+  tokenStreamingRefreshIntervalMs?: number;
+  /** Typewriter reveal speed (chars/sec) when tokenStreamingStyle=typewriter-glow. */
+  tokenStreamingTypewriterCharsPerSecond?: number;
+  /** Trailing glow width (chars) when tokenStreamingStyle=typewriter-glow. */
+  tokenStreamingGlowChars?: number;
+  /** Glow fade duration (ms) when tokenStreamingStyle=typewriter-glow. */
+  tokenStreamingGlowFadeMs?: number;
   showCompactions?: boolean;
   enableSleeptime: boolean;
   sessionContextEnabled: boolean; // Send device/agent context on first message of each session
@@ -146,6 +160,11 @@ const DEFAULT_SETTINGS: Settings = {
   lastAgent: null,
   tokenStreaming: false,
   reasoningTabCycleEnabled: false,
+  tokenStreamingStyle: "typewriter-glow",
+  tokenStreamingRefreshIntervalMs: 33,
+  tokenStreamingTypewriterCharsPerSecond: 300,
+  tokenStreamingGlowChars: 18,
+  tokenStreamingGlowFadeMs: 350,
   showCompactions: false,
   enableSleeptime: false,
   conversationSwitchAlertEnabled: false,

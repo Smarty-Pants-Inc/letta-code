@@ -438,10 +438,11 @@ export const commands: Record<string, Command> = {
 
   // === Hidden commands (not shown in autocomplete) ===
   "/stream": {
-    desc: "Toggle token streaming on/off",
+    desc: "Streaming display settings (on/off + optional typewriter/glow)",
+    args: "[on|off|plain|typewriter|rate <ms>|speed <cps>|glow <chars>|fade <ms>|status]",
     // Keep discoverable: streaming is a core UX feature (and a frequent debug toggle).
     hidden: false,
-    noArgs: true,
+    noArgs: false,
     handler: () => {
       // Handled specially in App.tsx for live toggling
       return "Toggling token streaming...";
