@@ -261,7 +261,11 @@ import {
 import { formatStatusLineHelp } from "./helpers/statusLineHelp";
 import { buildStatusLinePayload } from "./helpers/statusLinePayload";
 import { executeStatusLineCommand } from "./helpers/statusLineRuntime";
-import { type ApprovalRequest, drainStreamWithResume } from "./helpers/stream";
+import {
+  type ApprovalRequest,
+  type DrainStreamHook,
+  drainStreamWithResume,
+} from "./helpers/stream";
 import {
   collectFinishedTaskToolCalls,
   createSubagentGroupItem,
@@ -4109,6 +4113,23 @@ export default function App({
         setNetworkPhase("upload");
         abortControllerRef.current = new AbortController();
 
+        // Show an immediate placeholder so the transcript doesn't look "stuck"
+        // during provider TTFT / initial server-side work.
+        clearThinkingPlaceholder();
+        {
+          const placeholderId = uid("thinking");
+          thinkingPlaceholderIdRef.current = placeholderId;
+          buffersRef.current.byId.set(placeholderId, {
+            kind: "event",
+            id: placeholderId,
+            eventType: "thinking",
+            eventData: {},
+            phase: "running",
+          });
+          buffersRef.current.order.push(placeholderId);
+          refreshDerived();
+        }
+
         // Recover interrupted message only after explicit user interrupt:
         // if cache contains ONLY user messages, prepend them.
         // Note: type="message" is a local discriminator (not in SDK types) to distinguish from approvals
@@ -4246,6 +4267,10 @@ export default function App({
             );
             turnToolContextId = getStreamToolContextId(stream);
           } catch (preStreamError) {
+            // If we couldn't even start the stream, clear the TTFT placeholder.
+            clearThinkingPlaceholder();
+            refreshDerived();
+
             debugLog(
               "stream",
               "Pre-stream error: %s (status=%s)",
@@ -4631,6 +4656,8 @@ export default function App({
           };
 
           const handleFirstMessage = () => {
+            clearThinkingPlaceholder();
+            refreshDerived();
             setNetworkPhase("download");
             void syncAgentState();
           };
@@ -4648,6 +4675,29 @@ export default function App({
             contextTrackerRef.current.currentTurnId++;
           }
 
+          let clearedThinking = false;
+          const onAnyOutputChunk = async ({
+            chunk,
+            shouldOutput,
+          }: {
+            chunk: unknown;
+            shouldOutput: boolean;
+          }) => {
+            // Clear on any non-ping chunk we intend to render/accumulate.
+            const mt =
+              typeof chunk === "object" &&
+              chunk !== null &&
+              "message_type" in chunk
+                ? (chunk as { message_type?: string }).message_type
+                : undefined;
+            if (!clearedThinking && shouldOutput && mt !== "ping") {
+              clearedThinking = true;
+              clearThinkingPlaceholder();
+              refreshDerived();
+            }
+            return undefined;
+          };
+
           const {
             stopReason,
             approval,
@@ -4661,9 +4711,13 @@ export default function App({
             refreshDerivedThrottled,
             signal, // Use captured signal, not ref (which may be nulled by handleInterrupt)
             handleFirstMessage,
-            undefined,
+            // Hook: clear placeholder on first meaningful chunk.
+            onAnyOutputChunk as unknown as DrainStreamHook,
             contextTrackerRef.current,
           );
+
+          // Ensure placeholder is cleared even if stream ended before any output.
+          clearThinkingPlaceholder();
 
           // Update currentRunId for error reporting in catch block
           currentRunId = lastRunId ?? undefined;
@@ -6035,7 +6089,22 @@ export default function App({
     [refreshDerived],
   );
 
+  // "Thinking..." placeholder that appears immediately on send to cover TTFT gaps.
+  const thinkingPlaceholderIdRef = useRef<string | null>(null);
+  const clearThinkingPlaceholder = useCallback(() => {
+    const id = thinkingPlaceholderIdRef.current;
+    if (!id) return;
+    thinkingPlaceholderIdRef.current = null;
+    buffersRef.current.byId.delete(id);
+    buffersRef.current.order = buffersRef.current.order.filter(
+      (lineId) => lineId !== id,
+    );
+  }, []);
+
   const handleInterrupt = useCallback(async () => {
+    // Clear TTFT placeholder immediately on user interrupt.
+    clearThinkingPlaceholder();
+
     // If we're executing client-side tools, abort them AND the main stream
     const hasTrackedTools =
       executingToolCallIdsRef.current.length > 0 ||
@@ -6295,6 +6364,7 @@ export default function App({
     autoDeniedApprovals,
     queueApprovalResults,
     resetTrajectoryBases,
+    clearThinkingPlaceholder,
   ]);
 
   // Keep ref to latest processConversation to avoid circular deps in useEffect
