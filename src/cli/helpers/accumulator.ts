@@ -269,6 +269,9 @@ export type Buffers = {
   approvalsPending: boolean;
   // Agent ID for passing to hooks (needed for server-side tools like memory)
   agentId?: string;
+  // Track which kind last updated lastOtid so we don't finish a reasoning line
+  // just because an assistant/tool chunk came in with a different otid.
+  lastOtidKind: "assistant" | "reasoning" | "other";
 };
 
 export function createBuffers(agentId?: string): Buffers {
@@ -279,6 +282,7 @@ export function createBuffers(agentId?: string): Buffers {
     pendingToolByRun: new Map(),
     toolCallIdToLineId: new Map(),
     lastOtid: null,
+    lastOtidKind: "other",
     assistantCanonicalByMessageId: new Map(),
     assistantCanonicalByOtid: new Map(),
     reasoningCanonicalByMessageId: new Map(),
@@ -337,12 +341,19 @@ function markAsFinished(b: Buffers, id: string) {
 }
 
 // Helper to mark previous otid's line as finished when transitioning to new otid
-function handleOtidTransition(b: Buffers, newOtid: string | undefined) {
+function handleOtidTransition(
+  b: Buffers,
+  newOtid: string | undefined,
+  kind: "assistant" | "reasoning" | "other",
+) {
   // console.log(`[OTID_TRANSITION] Called with newOtid=${newOtid}, lastOtid=${b.lastOtid}`);
 
   // If transitioning to a different otid (including null/undefined), finish only assistant/reasoning lines.
   // Tool calls should finish exclusively when a tool_return arrives (merged by toolCallId).
-  if (b.lastOtid && b.lastOtid !== newOtid) {
+  // Only finish the previous line if it's the same kind as the last content.
+  // Otherwise, interleaving assistant/tool chunks can accidentally "re-finish"
+  // a reasoning line and cause brief replay/flicker when the next message starts.
+  if (b.lastOtid && b.lastOtid !== newOtid && b.lastOtidKind === kind) {
     const prev = b.byId.get(b.lastOtid);
     // console.log(`[OTID_TRANSITION] Found prev line: kind=${prev?.kind}, phase=${(prev as any)?.phase}`);
     if (prev && (prev.kind === "assistant" || prev.kind === "reasoning")) {
@@ -353,6 +364,7 @@ function handleOtidTransition(b: Buffers, newOtid: string | undefined) {
 
   // Update last otid (can be null)
   b.lastOtid = newOtid ?? null;
+  b.lastOtidKind = kind;
   // console.log(`[OTID_TRANSITION] Updated lastOtid to ${b.lastOtid}`);
 }
 
@@ -713,7 +725,7 @@ export function onChunk(
       }
 
       // Handle otid transition (mark previous line as finished)
-      handleOtidTransition(b, id);
+      handleOtidTransition(b, id, "reasoning");
 
       const delta = chunk.reasoning;
       const line = ensure(b, id, () => ({
@@ -747,7 +759,7 @@ export function onChunk(
       if (!id) break;
 
       // Handle otid transition (mark previous line as finished)
-      handleOtidTransition(b, id);
+      handleOtidTransition(b, id, "assistant");
 
       const delta = extractTextPart(chunk.content); // NOTE: may be list of parts
       const line = ensure(b, id, () => ({
@@ -776,7 +788,7 @@ export function onChunk(
       if (!id) break;
 
       // Handle otid transition (mark previous line as finished)
-      handleOtidTransition(b, id);
+      handleOtidTransition(b, id, "other");
 
       // Extract text content from the user message
       const rawText = extractTextPart(chunk.content);
@@ -805,7 +817,7 @@ export function onChunk(
     case "tool_call_message":
     case "approval_request_message": {
       // Handle otid transition (mark previous line as finished)
-      handleOtidTransition(b, chunk.otid ?? undefined);
+      handleOtidTransition(b, chunk.otid ?? undefined, "other");
 
       // Use deprecated tool_call or new tool_calls array
       const toolCall =
@@ -1157,7 +1169,7 @@ export function onChunk(
         if (!id) break;
 
         // Handle otid transition (mark previous line as finished)
-        handleOtidTransition(b, id);
+        handleOtidTransition(b, id, "other");
 
         const eventType = eventChunk.event_type || "unknown";
         ensure(b, id, () => ({

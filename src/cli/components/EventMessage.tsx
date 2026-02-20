@@ -34,24 +34,6 @@ export const EventMessage = memo(({ line }: { line: EventLine }) => {
   const columns = useTerminalWidth();
   const rightWidth = Math.max(0, columns - 2);
 
-  if (line.eventType === "thinking") {
-    const isRunning = line.phase === "running";
-    return (
-      <Box flexDirection="row">
-        <Box width={2} flexShrink={0}>
-          {isRunning ? (
-            <BlinkDot color={colors.tool.running} />
-          ) : (
-            <Text color={colors.tool.completed}>●</Text>
-          )}
-        </Box>
-        <Box flexGrow={1} width={rightWidth}>
-          <Text dimColor>Thinking...</Text>
-        </Box>
-      </Box>
-    );
-  }
-
   if (line.eventType === "task_notification") {
     const summary = line.summary || "Agent task completed";
     return (
