@@ -75,6 +75,14 @@ const _colors = {
     accent: brandColors.primaryAccent,
   },
 
+  // Token streaming highlight (typewriter-glow)
+  // Keep this warm so streaming text reads like an ember cooling into normal text.
+  streamingGlow: {
+    hot: "#FFD28A", // pale amber
+    warm: "#FF5533", // brand orange
+    cool: "#E07050", // coral
+  },
+
   // Selector boxes (model, agent, generic select)
   selector: {
     border: brandColors.primaryAccentLight,

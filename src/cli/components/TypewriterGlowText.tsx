@@ -341,17 +341,17 @@ export function TypewriterGlowText({
 
   const tailAColor =
     fadePhase === 0
-      ? colors.status.processingShimmer
+      ? colors.streamingGlow.hot
       : fadePhase === 1
-        ? colors.status.processing
+        ? colors.streamingGlow.warm
         : undefined;
   const tailBColor =
     fadePhase === 0
-      ? colors.status.processing
+      ? colors.streamingGlow.warm
       : fadePhase === 1
-        ? colors.tool.streaming
+        ? colors.streamingGlow.cool
         : undefined;
-  const tailCColor = fadePhase === 0 ? colors.tool.streaming : undefined;
+  const tailCColor = fadePhase === 0 ? colors.streamingGlow.cool : undefined;
 
   return (
     <Text dimColor={dimColor} wrap="wrap">
