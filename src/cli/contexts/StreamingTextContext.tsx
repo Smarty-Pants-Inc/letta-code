@@ -13,6 +13,11 @@ export type TokenStreamingConfig = {
   glowChars: number;
   /** Time for the glow highlight to fade back to normal (ms). */
   glowFadeMs: number;
+
+  /** Optional override colors for the typewriter-glow tail. */
+  glowHotColor?: string;
+  glowWarmColor?: string;
+  glowCoolColor?: string;
 };
 
 const DEFAULT_CONFIG: TokenStreamingConfig = {
@@ -21,8 +26,8 @@ const DEFAULT_CONFIG: TokenStreamingConfig = {
   // 60fps cap by default for smoother typewriter/glow.
   refreshIntervalMs: 16,
   typewriterCharsPerSecond: 300,
-  glowChars: 18,
-  glowFadeMs: 350,
+  glowChars: 3,
+  glowFadeMs: 160,
 };
 
 const StreamingTextContext =

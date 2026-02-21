@@ -984,6 +984,9 @@ export default function App({
   tokenStreamingTypewriterCharsPerSecond,
   tokenStreamingGlowChars,
   tokenStreamingGlowFadeMs,
+  tokenStreamingGlowHotColor,
+  tokenStreamingGlowWarmColor,
+  tokenStreamingGlowCoolColor,
   showCompactions = false,
   agentProvenance = null,
   releaseNotes = null,
@@ -1011,6 +1014,9 @@ export default function App({
   tokenStreamingTypewriterCharsPerSecond?: number;
   tokenStreamingGlowChars?: number;
   tokenStreamingGlowFadeMs?: number;
+  tokenStreamingGlowHotColor?: string;
+  tokenStreamingGlowWarmColor?: string;
+  tokenStreamingGlowCoolColor?: string;
   showCompactions?: boolean;
   agentProvenance?: AgentProvenance | null;
   releaseNotes?: string | null; // Markdown release notes to display above header
@@ -1713,8 +1719,8 @@ export default function App({
   const [typewriterCharsPerSecond, setTypewriterCharsPerSecond] = useState(
     tokenStreamingTypewriterCharsPerSecond ?? 300,
   );
-  const [glowChars, setGlowChars] = useState(tokenStreamingGlowChars ?? 18);
-  const [glowFadeMs, setGlowFadeMs] = useState(tokenStreamingGlowFadeMs ?? 350);
+  const [glowChars, setGlowChars] = useState(tokenStreamingGlowChars ?? 3);
+  const [glowFadeMs, setGlowFadeMs] = useState(tokenStreamingGlowFadeMs ?? 160);
 
   // Show compaction messages preference (can be toggled at runtime)
   const [showCompactionsEnabled, _setShowCompactionsEnabled] =
@@ -7996,7 +8002,7 @@ export default function App({
           let nextFade = glowFadeMs;
 
           const usage =
-            "Usage: /stream [on|off|plain|typewriter] | /stream rate <ms> | /stream speed <cps> | /stream glow <chars> | /stream fade <ms> | /stream status";
+            "Usage: /stream [on|off|plain|typewriter] | /stream rate <ms> | /stream speed <cps> | /stream glow <0-3> | /stream fade <ms> | /stream status";
 
           if (!sub) {
             nextEnabled = !tokenStreamingEnabled;
@@ -8036,7 +8042,7 @@ export default function App({
               cmd.finish(usage, false);
               return { submitted: true };
             }
-            nextGlow = Math.max(0, Math.min(200, parsed));
+            nextGlow = Math.max(0, Math.min(3, parsed));
           } else if (sub === "fade") {
             const raw = parts[2];
             const parsed = raw ? Number.parseInt(raw, 10) : NaN;
@@ -8045,7 +8051,7 @@ export default function App({
               cmd.finish(usage, false);
               return { submitted: true };
             }
-            nextFade = Math.max(80, Math.min(2000, parsed));
+            nextFade = Math.max(40, Math.min(500, parsed));
           } else if (sub === "status") {
             const cmd = commandRunner.start(trimmed, "Streaming settings:");
             cmd.finish(
@@ -13036,6 +13042,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
       typewriterCharsPerSecond,
       glowChars,
       glowFadeMs,
+      glowHotColor: tokenStreamingGlowHotColor,
+      glowWarmColor: tokenStreamingGlowWarmColor,
+      glowCoolColor: tokenStreamingGlowCoolColor,
     }),
     [
       tokenStreamingEnabled,
@@ -13044,6 +13053,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
       typewriterCharsPerSecond,
       glowChars,
       glowFadeMs,
+      tokenStreamingGlowHotColor,
+      tokenStreamingGlowWarmColor,
+      tokenStreamingGlowCoolColor,
     ],
   );
 

@@ -55,12 +55,13 @@ function renderSlice(
     }
   }
 
-  const mk = (t: string, bold: boolean) => {
+  const mk = (t: string, bold: boolean, absStart: number) => {
     if (!t) return null;
     if (!bold && !color) return t;
+    const absEnd = absStart + t.length;
     return (
       <Text
-        key={`${globalStart}:${bold ? "b" : "n"}:${t.length}`}
+        key={`${absStart}:${absEnd}:${bold ? "b" : "n"}:${color ?? ""}`}
         bold={bold}
         dimColor={dimColor}
         color={color}
@@ -71,7 +72,7 @@ function renderSlice(
   };
 
   if (merged.length === 0) {
-    const n = mk(slice, false);
+    const n = mk(slice, false, globalStart);
     return n ? [n] : [];
   }
 
@@ -83,15 +84,15 @@ function renderSlice(
 
     const before = slice.slice(cursor, a);
     const bold = slice.slice(a, b);
-    const nb = mk(before, false);
-    const bb = mk(bold, true);
+    const nb = mk(before, false, globalStart + cursor);
+    const bb = mk(bold, true, globalStart + a);
     if (nb) out.push(nb);
     if (bb) out.push(bb);
     cursor = b;
   }
 
   const after = slice.slice(cursor);
-  const na = mk(after, false);
+  const na = mk(after, false, globalStart + cursor);
   if (na) out.push(na);
   return out;
 }
@@ -295,7 +296,8 @@ export function TypewriterGlowText({
 
     // Reset to bright and fade down.
     setFadePhase(0);
-    const total = clamp(cfg.glowFadeMs, 80, 2000);
+    // Keep the fade fairly quick; long fades feel like a persistent highlight.
+    const total = clamp(cfg.glowFadeMs, 40, 500);
     const t1 = setTimeout(() => setFadePhase(1), Math.floor(total * 0.35));
     const t2 = setTimeout(() => setFadePhase(2), total);
     fadeTimersRef.current = [t1, t2];
@@ -326,32 +328,30 @@ export function TypewriterGlowText({
     [displayText],
   );
 
-  const glowChars = clamp(cfg.glowChars, 0, 200);
+  // Keep the glow tail short: hot, warm, cool (then normal text).
+  const glowChars = clamp(cfg.glowChars, 0, 3);
   const glowStart = Math.max(0, displayTextStyled.length - glowChars);
   const prefix = displayTextStyled.slice(0, glowStart);
   const tail = displayTextStyled.slice(glowStart);
 
-  // Split the glow tail into 3 segments so the highlight looks less "blocky".
-  const aLen = Math.max(0, Math.floor(tail.length * 0.34));
-  const bLen = Math.max(0, Math.floor(tail.length * 0.33));
-  const cLen = Math.max(0, tail.length - aLen - bLen);
-  const tailC = tail.slice(0, cLen);
-  const tailB = tail.slice(cLen, cLen + bLen);
-  const tailA = tail.slice(cLen + bLen);
+  // Split into 3 stages from oldest->newest.
+  // For short tails, do a strict per-character gradient:
+  //   cool ... warm ... hot
+  const splitWarmStart = Math.max(0, tail.length - 2);
+  const splitHotStart = Math.max(0, tail.length - 1);
+  const tailC = tail.slice(0, splitWarmStart);
+  const tailB = tail.slice(splitWarmStart, splitHotStart);
+  const tailA = tail.slice(splitHotStart);
+
+  const hotColor = cfg.glowHotColor ?? colors.streamingGlow.hot;
+  const warmColor = cfg.glowWarmColor ?? colors.streamingGlow.warm;
+  const coolColor = cfg.glowCoolColor ?? colors.streamingGlow.cool;
 
   const tailAColor =
-    fadePhase === 0
-      ? colors.streamingGlow.hot
-      : fadePhase === 1
-        ? colors.streamingGlow.warm
-        : undefined;
+    fadePhase === 0 ? hotColor : fadePhase === 1 ? warmColor : undefined;
   const tailBColor =
-    fadePhase === 0
-      ? colors.streamingGlow.warm
-      : fadePhase === 1
-        ? colors.streamingGlow.cool
-        : undefined;
-  const tailCColor = fadePhase === 0 ? colors.streamingGlow.cool : undefined;
+    fadePhase === 0 ? warmColor : fadePhase === 1 ? coolColor : undefined;
+  const tailCColor = fadePhase === 0 ? coolColor : undefined;
 
   return (
     <Text dimColor={dimColor} wrap="wrap">
