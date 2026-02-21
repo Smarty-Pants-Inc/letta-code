@@ -78,6 +78,10 @@ export interface Settings {
   tokenStreamingGlowChars?: number;
   /** Glow fade duration (ms) when tokenStreamingStyle=typewriter-glow. */
   tokenStreamingGlowFadeMs?: number;
+  /** Optional glow color overrides (hex or Ink color string). */
+  tokenStreamingGlowHotColor?: string;
+  tokenStreamingGlowWarmColor?: string;
+  tokenStreamingGlowCoolColor?: string;
   showCompactions?: boolean;
   enableSleeptime: boolean;
   sessionContextEnabled: boolean; // Send device/agent context on first message of each session
@@ -163,8 +167,8 @@ const DEFAULT_SETTINGS: Settings = {
   tokenStreamingStyle: "typewriter-glow",
   tokenStreamingRefreshIntervalMs: 16,
   tokenStreamingTypewriterCharsPerSecond: 300,
-  tokenStreamingGlowChars: 18,
-  tokenStreamingGlowFadeMs: 350,
+  tokenStreamingGlowChars: 3,
+  tokenStreamingGlowFadeMs: 160,
   showCompactions: false,
   enableSleeptime: false,
   conversationSwitchAlertEnabled: false,
