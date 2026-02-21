@@ -26,8 +26,8 @@ const DEFAULT_CONFIG: TokenStreamingConfig = {
   // 60fps cap by default for smoother typewriter/glow.
   refreshIntervalMs: 16,
   typewriterCharsPerSecond: 300,
-  glowChars: 3,
-  glowFadeMs: 160,
+  glowChars: 6,
+  glowFadeMs: 140,
 };
 
 const StreamingTextContext =

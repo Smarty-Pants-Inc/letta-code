@@ -1717,8 +1717,8 @@ export default function App({
   const streamingRefreshIntervalMs = tokenStreamingRefreshIntervalMs ?? 33;
   const typewriterCharsPerSecond =
     tokenStreamingTypewriterCharsPerSecond ?? 300;
-  const glowChars = tokenStreamingGlowChars ?? 3;
-  const glowFadeMs = tokenStreamingGlowFadeMs ?? 160;
+  const glowChars = tokenStreamingGlowChars ?? 6;
+  const glowFadeMs = tokenStreamingGlowFadeMs ?? 140;
 
   // Show compaction messages preference (can be toggled at runtime)
   const [showCompactionsEnabled, _setShowCompactionsEnabled] =

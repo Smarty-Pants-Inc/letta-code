@@ -298,7 +298,7 @@ export function TypewriterGlowText({
     setFadePhase(0);
     // Keep the fade fairly quick; long fades feel like a persistent highlight.
     const total = clamp(cfg.glowFadeMs, 40, 500);
-    const t1 = setTimeout(() => setFadePhase(1), Math.floor(total * 0.35));
+    const t1 = setTimeout(() => setFadePhase(1), Math.floor(total * 0.25));
     const t2 = setTimeout(() => setFadePhase(2), total);
     fadeTimersRef.current = [t1, t2];
 
@@ -328,20 +328,24 @@ export function TypewriterGlowText({
     [displayText],
   );
 
-  // Keep the glow tail short: hot, warm, cool (then normal text).
-  const glowChars = clamp(cfg.glowChars, 0, 3);
+  // Glow tail: 1 hot, 2 warm, 3 cool (then normal text).
+  // This reads like an ember cooling down without a long highlight ribbon.
+  const glowChars = clamp(cfg.glowChars, 0, 6);
   const glowStart = Math.max(0, displayTextStyled.length - glowChars);
   const prefix = displayTextStyled.slice(0, glowStart);
   const tail = displayTextStyled.slice(glowStart);
 
   // Split into 3 stages from oldest->newest.
-  // For short tails, do a strict per-character gradient:
-  //   cool ... warm ... hot
-  const splitWarmStart = Math.max(0, tail.length - 2);
-  const splitHotStart = Math.max(0, tail.length - 1);
-  const tailC = tail.slice(0, splitWarmStart);
-  const tailB = tail.slice(splitWarmStart, splitHotStart);
-  const tailA = tail.slice(splitHotStart);
+  const hotLen = Math.min(1, tail.length);
+  const warmLen = Math.min(2, Math.max(0, tail.length - hotLen));
+  const coolLen = Math.min(3, Math.max(0, tail.length - hotLen - warmLen));
+  const tailA = hotLen > 0 ? tail.slice(-hotLen) : "";
+  const tailB =
+    warmLen > 0 ? tail.slice(-(hotLen + warmLen), -hotLen || undefined) : "";
+  const tailC =
+    coolLen > 0
+      ? tail.slice(0, Math.max(0, tail.length - hotLen - warmLen))
+      : "";
 
   const hotColor = cfg.glowHotColor ?? colors.streamingGlow.hot;
   const warmColor = cfg.glowWarmColor ?? colors.streamingGlow.warm;
