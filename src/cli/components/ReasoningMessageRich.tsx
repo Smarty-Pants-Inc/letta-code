@@ -1,6 +1,7 @@
 import { Box } from "ink";
 import { memo } from "react";
 import { useTokenStreamingConfig } from "../contexts/StreamingTextContext";
+import { normalizeHeadingBoundaries } from "../helpers/streamingHeaderFormat";
 import { useTerminalWidth } from "../hooks/useTerminalWidth";
 import { MarkdownDisplay } from "./MarkdownDisplay.js";
 import { Text } from "./Text";
@@ -44,6 +45,12 @@ export const ReasoningMessage = memo(({ line }: { line: ReasoningLine }) => {
     streamCfg.enabled &&
     streamCfg.style === "typewriter-glow";
 
+  // Even when we are not using the typewriter renderer, we still want to prevent
+  // "glued" section headings from staying attached after markdown parsing.
+  const displayText = useTypewriterGlow
+    ? normalizedText
+    : normalizeHeadingBoundaries(normalizedText);
+
   // Continuation lines skip the header, just show content
   if (line.isContinuation) {
     return (
@@ -53,9 +60,9 @@ export const ReasoningMessage = memo(({ line }: { line: ReasoningLine }) => {
         </Box>
         <Box flexGrow={1} width={contentWidth}>
           {useTypewriterGlow ? (
-            <TypewriterGlowText text={normalizedText} dimColor={true} />
+            <TypewriterGlowText text={displayText} dimColor={true} />
           ) : (
-            <MarkdownDisplay text={normalizedText} dimColor={true} />
+            <MarkdownDisplay text={displayText} dimColor={true} />
           )}
         </Box>
       </Box>
@@ -79,9 +86,9 @@ export const ReasoningMessage = memo(({ line }: { line: ReasoningLine }) => {
         </Box>
         <Box flexGrow={1} width={contentWidth}>
           {useTypewriterGlow ? (
-            <TypewriterGlowText text={normalizedText} dimColor={true} />
+            <TypewriterGlowText text={displayText} dimColor={true} />
           ) : (
-            <MarkdownDisplay text={normalizedText} dimColor={true} />
+            <MarkdownDisplay text={displayText} dimColor={true} />
           )}
         </Box>
       </Box>
