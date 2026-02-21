@@ -32,4 +32,18 @@ describe("formatStreamingHeaders", () => {
     expect(res.text).toBe("Hello\nnext");
     expect(res.boldSpans).toEqual([{ start: 0, end: 5 }]);
   });
+
+  test("splits glued section heading onto its own line", () => {
+    const input =
+      "Intro.**Updating code with upstream changes**\n\nNext paragraph";
+    const res = formatStreamingHeaders(input);
+    expect(res.text).toBe(
+      "Intro.\n\nUpdating code with upstream changes\n\nNext paragraph",
+    );
+    const start = res.text.indexOf("Updating code with upstream changes");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(res.boldSpans).toEqual([
+      { start, end: start + "Updating code with upstream changes".length },
+    ]);
+  });
 });
