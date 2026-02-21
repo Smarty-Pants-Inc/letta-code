@@ -1709,18 +1709,16 @@ export default function App({
     initialReasoningTabCycleEnabled,
   );
 
-  // Streaming renderer configuration (persisted via settings).
+  // Streaming renderer configuration.
+  // Keep the command surface minimal; advanced tuning comes from settings.
   const [streamingStyle, setStreamingStyle] = useState<TokenStreamingStyle>(
     tokenStreamingStyle ?? "typewriter-glow",
   );
-  const [streamingRefreshIntervalMs, setStreamingRefreshIntervalMs] = useState(
-    tokenStreamingRefreshIntervalMs ?? 33,
-  );
-  const [typewriterCharsPerSecond, setTypewriterCharsPerSecond] = useState(
-    tokenStreamingTypewriterCharsPerSecond ?? 300,
-  );
-  const [glowChars, setGlowChars] = useState(tokenStreamingGlowChars ?? 3);
-  const [glowFadeMs, setGlowFadeMs] = useState(tokenStreamingGlowFadeMs ?? 160);
+  const streamingRefreshIntervalMs = tokenStreamingRefreshIntervalMs ?? 33;
+  const typewriterCharsPerSecond =
+    tokenStreamingTypewriterCharsPerSecond ?? 300;
+  const glowChars = tokenStreamingGlowChars ?? 3;
+  const glowFadeMs = tokenStreamingGlowFadeMs ?? 160;
 
   // Show compaction messages preference (can be toggled at runtime)
   const [showCompactionsEnabled, _setShowCompactionsEnabled] =
@@ -7980,29 +7978,21 @@ export default function App({
           return { submitted: true };
         }
 
-        // Special handling for /stream command - toggle and save
+        // Special handling for /stream command - minimal surface.
         // Usage:
         //   /stream
         //   /stream on|off
-        //   /stream plain|typewriter|typewriter-glow
-        //   /stream rate <ms>
-        //   /stream speed <chars_per_sec>
-        //   /stream glow <chars>
-        //   /stream fade <ms>
-        //   /stream status
+        //   /stream plain
+        //   /stream typewriter (aka typewriter-glow)
         if (trimmed === "/stream" || trimmed.startsWith("/stream ")) {
           const parts = trimmed.split(/\s+/);
           const sub = (parts[1] || "").toLowerCase();
 
           let nextEnabled = tokenStreamingEnabled;
           let nextStyle: TokenStreamingStyle = streamingStyle;
-          let nextRateMs = streamingRefreshIntervalMs;
-          let nextCps = typewriterCharsPerSecond;
-          let nextGlow = glowChars;
-          let nextFade = glowFadeMs;
 
           const usage =
-            "Usage: /stream [on|off|plain|typewriter] | /stream rate <ms> | /stream speed <cps> | /stream glow <0-3> | /stream fade <ms> | /stream status";
+            "Usage: /stream | /stream on|off | /stream plain | /stream typewriter";
 
           if (!sub) {
             nextEnabled = !tokenStreamingEnabled;
@@ -8016,56 +8006,6 @@ export default function App({
           } else if (sub === "typewriter" || sub === "typewriter-glow") {
             nextEnabled = true;
             nextStyle = "typewriter-glow";
-          } else if (sub === "rate") {
-            const raw = parts[2];
-            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-            if (!Number.isFinite(parsed)) {
-              const cmd = commandRunner.start(trimmed, usage);
-              cmd.finish(usage, false);
-              return { submitted: true };
-            }
-            nextRateMs = Math.max(16, Math.min(250, parsed));
-          } else if (sub === "speed") {
-            const raw = parts[2];
-            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-            if (!Number.isFinite(parsed)) {
-              const cmd = commandRunner.start(trimmed, usage);
-              cmd.finish(usage, false);
-              return { submitted: true };
-            }
-            nextCps = Math.max(60, Math.min(2000, parsed));
-          } else if (sub === "glow") {
-            const raw = parts[2];
-            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-            if (!Number.isFinite(parsed)) {
-              const cmd = commandRunner.start(trimmed, usage);
-              cmd.finish(usage, false);
-              return { submitted: true };
-            }
-            nextGlow = Math.max(0, Math.min(3, parsed));
-          } else if (sub === "fade") {
-            const raw = parts[2];
-            const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-            if (!Number.isFinite(parsed)) {
-              const cmd = commandRunner.start(trimmed, usage);
-              cmd.finish(usage, false);
-              return { submitted: true };
-            }
-            nextFade = Math.max(40, Math.min(500, parsed));
-          } else if (sub === "status") {
-            const cmd = commandRunner.start(trimmed, "Streaming settings:");
-            cmd.finish(
-              [
-                `token streaming: ${tokenStreamingEnabled ? "on" : "off"}`,
-                `style: ${streamingStyle}`,
-                `rate: ${streamingRefreshIntervalMs}ms`,
-                `speed: ${typewriterCharsPerSecond} cps`,
-                `glow: ${glowChars} chars`,
-                `fade: ${glowFadeMs}ms`,
-              ].join("\n"),
-              true,
-            );
-            return { submitted: true };
           } else {
             const cmd = commandRunner.start(trimmed, usage);
             cmd.finish(usage, false);
@@ -8081,22 +8021,14 @@ export default function App({
           try {
             setTokenStreamingEnabled(nextEnabled);
             setStreamingStyle(nextStyle);
-            setStreamingRefreshIntervalMs(nextRateMs);
-            setTypewriterCharsPerSecond(nextCps);
-            setGlowChars(nextGlow);
-            setGlowFadeMs(nextFade);
 
             settingsManager.updateSettings({
               tokenStreaming: nextEnabled,
               tokenStreamingStyle: nextStyle,
-              tokenStreamingRefreshIntervalMs: nextRateMs,
-              tokenStreamingTypewriterCharsPerSecond: nextCps,
-              tokenStreamingGlowChars: nextGlow,
-              tokenStreamingGlowFadeMs: nextFade,
             });
 
             cmd.finish(
-              `Token streaming ${nextEnabled ? "enabled" : "disabled"} (style=${nextStyle}, rate=${nextRateMs}ms, speed=${nextCps}cps)`,
+              `Token streaming ${nextEnabled ? "enabled" : "disabled"} (style=${nextStyle})`,
               true,
             );
           } catch (error) {
