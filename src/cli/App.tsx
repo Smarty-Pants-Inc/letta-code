@@ -13000,8 +13000,16 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
         style={{ flexDirection: "column" }}
       >
         {(item: StaticItem, index: number) => {
+          const isContinuationLine =
+            (item.kind === "assistant" || item.kind === "reasoning") &&
+            "isContinuation" in item &&
+            item.isContinuation;
+
           return (
-            <Box key={item.id} marginTop={index > 0 ? 1 : 0}>
+            <Box
+              key={item.id}
+              marginTop={index > 0 && !isContinuationLine ? 1 : 0}
+            >
               {item.kind === "welcome" ? (
                 <WelcomeScreen loadingState="ready" {...item.snapshot} />
               ) : item.kind === "user" ? (
@@ -13305,6 +13313,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                 {liveItems.length > 0 && (
                   <Box flexDirection="column">
                     {liveItems.map((ln) => {
+                      const isContinuationLine =
+                        (ln.kind === "assistant" || ln.kind === "reasoning") &&
+                        ln.isContinuation;
                       const isFileTool =
                         ln.kind === "tool_call" &&
                         ln.name &&
@@ -13343,7 +13354,11 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                         ln.toolCallId === currentApproval.toolCallId;
 
                       return (
-                        <Box key={ln.id} flexDirection="column" marginTop={1}>
+                        <Box
+                          key={ln.id}
+                          flexDirection="column"
+                          marginTop={isContinuationLine ? 0 : 1}
+                        >
                           {matchesCurrentApproval ? (
                             <ApprovalSwitch
                               approval={currentApproval}
