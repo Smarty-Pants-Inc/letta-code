@@ -62,6 +62,11 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
   const lines = text.split("\n");
   const contentBlocks: React.ReactNode[] = [];
 
+  // Collapse excessive vertical whitespace. Ink treats each empty line we emit
+  // as real terminal height; models sometimes produce multiple blank lines
+  // (often whitespace-only) which reads as "CR/LF gaps".
+  let lastWasEmpty = false;
+
   let inCodeBlock = false;
   let codeBlockContent: string[] = [];
 
@@ -187,6 +192,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     // If we're inside a code block, collect the content
     if (inCodeBlock) {
       codeBlockContent.push(line);
+      lastWasEmpty = false;
       index++;
       continue;
     }
@@ -319,12 +325,18 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
           contentBlocks.push(tableElement);
         }
         index = tableIdx;
+        lastWasEmpty = false;
         continue;
       }
     }
 
     // Empty lines
     if (line.trim() === "") {
+      if (lastWasEmpty) {
+        index++;
+        continue;
+      }
+      lastWasEmpty = true;
       if (backgroundColor) {
         // Render a visible space so outer Transform can pad this line
         contentBlocks.push(
@@ -338,6 +350,8 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
       index++;
       continue;
     }
+
+    lastWasEmpty = false;
 
     // Regular paragraph text with optional hanging indent and line padding
     const needsTransform =

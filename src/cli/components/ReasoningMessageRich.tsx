@@ -12,9 +12,12 @@ import { TypewriterGlowText } from "./TypewriterGlowText";
 const normalize = (s: string) =>
   s
     .replace(/\r\n/g, "\n")
+    // Normalize stray CRs that can slip in via streaming or provider responses.
+    .replace(/\r/g, "\n")
     // Treat whitespace-only lines as blank lines so we can reliably collapse
     // excessive paragraph spacing even when the model emits indented "empty" lines.
-    .replace(/^[\t ]+$/gm, "")
+    // Use a broad whitespace class (excluding newlines) to catch non-breaking spaces too.
+    .replace(/^[^\S\n]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/^\n+/g, ""); // Only trim leading newlines, preserve trailing ones
 
