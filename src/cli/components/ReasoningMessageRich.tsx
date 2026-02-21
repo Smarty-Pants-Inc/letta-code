@@ -12,6 +12,9 @@ import { TypewriterGlowText } from "./TypewriterGlowText";
 const normalize = (s: string) =>
   s
     .replace(/\r\n/g, "\n")
+    // Treat whitespace-only lines as blank lines so we can reliably collapse
+    // excessive paragraph spacing even when the model emits indented "empty" lines.
+    .replace(/^[\t ]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/^\n+/g, ""); // Only trim leading newlines, preserve trailing ones
 
