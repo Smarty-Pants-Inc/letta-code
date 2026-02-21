@@ -78,7 +78,7 @@ const _colors = {
   // Token streaming highlight (typewriter-glow)
   // Keep this warm so streaming text reads like an ember cooling into normal text.
   streamingGlow: {
-    hot: "#FFD28A", // pale amber
+    hot: "#FF9500", // bright orange (avoid yellow cast)
     warm: "#FF5533", // brand orange
     cool: "#E07050", // coral
   },
