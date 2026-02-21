@@ -167,6 +167,11 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     const line = lines[index] as string; // Safe: index < lines.length
     const key = `line-${index}`;
 
+    // Any non-empty line breaks a run of empty lines.
+    if (line.trim() !== "") {
+      lastWasEmpty = false;
+    }
+
     // Handle code blocks
     if (codeBlockRegex.test(line)) {
       if (!inCodeBlock) {
@@ -192,7 +197,6 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     // If we're inside a code block, collect the content
     if (inCodeBlock) {
       codeBlockContent.push(line);
-      lastWasEmpty = false;
       index++;
       continue;
     }
@@ -325,7 +329,6 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
           contentBlocks.push(tableElement);
         }
         index = tableIdx;
-        lastWasEmpty = false;
         continue;
       }
     }
@@ -350,8 +353,6 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
       index++;
       continue;
     }
-
-    lastWasEmpty = false;
 
     // Regular paragraph text with optional hanging indent and line padding
     const needsTransform =
