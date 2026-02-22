@@ -11466,7 +11466,9 @@ ${SYSTEM_REMINDER_CLOSE}
             setCurrentToolsetPreference("auto");
 
             if (currentSystemPromptId !== targetSystemPromptId) {
-              const { updateAgentSystemPrompt } = await import("../agent/modify");
+              const { updateAgentSystemPrompt } = await import(
+                "../agent/modify"
+              );
               const promptResult = await updateAgentSystemPrompt(
                 agentId,
                 targetSystemPromptId,
@@ -12045,11 +12047,6 @@ ${SYSTEM_REMINDER_CLOSE}
     }
   }, [commandRunner, profileConfirmPending]);
 
-  // Track permission mode changes for UI updates
-  const [uiPermissionMode, setUiPermissionMode] = useState(
-    permissionMode.getMode(),
-  );
-
   // Persist permission mode per conversation (e.g., keep YOLO on reconnect).
   //
   // Behavior:
@@ -12375,14 +12372,14 @@ ${SYSTEM_REMINDER_CLOSE}
       } else {
         reasoningCyclePatchedAgentStateRef.current = false;
       }
-      setCurrentModelId(next.id);
+      setCurrentModelId(next.modelId);
       triggerStatusLineRefresh();
 
       // Debounce the server update.
       reasoningCycleDesiredRef.current = {
         modelHandle,
         effort: next.effort,
-        modelId: next.id,
+        modelId: next.modelId,
       };
       if (reasoningCycleTimerRef.current) {
         clearTimeout(reasoningCycleTimerRef.current);
@@ -12994,269 +12991,35 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
   return (
     <TokenStreamingProvider config={tokenStreamingConfig}>
       <Box key={resumeKey} flexDirection="column">
-      <Static
-        key={staticRenderEpoch}
-        items={staticItems}
-        style={{ flexDirection: "column" }}
-      >
-        {(item: StaticItem, index: number) => {
-          const isContinuationLine =
-            (item.kind === "assistant" || item.kind === "reasoning") &&
-            "isContinuation" in item &&
-            item.isContinuation;
+        <Static
+          key={staticRenderEpoch}
+          items={staticItems}
+          style={{ flexDirection: "column" }}
+        >
+          {(item: StaticItem, index: number) => {
+            const isContinuationLine =
+              (item.kind === "assistant" || item.kind === "reasoning") &&
+              "isContinuation" in item &&
+              item.isContinuation;
 
-          return (
-            <Box
-              key={item.id}
-              marginTop={index > 0 && !isContinuationLine ? 1 : 0}
-            >
-              {item.kind === "welcome" ? (
-                <WelcomeScreen loadingState="ready" {...item.snapshot} />
-              ) : item.kind === "user" ? (
-                <UserMessage line={item} prompt={statusLine.prompt} />
-              ) : item.kind === "reasoning" ? (
-                <ReasoningMessage line={item} />
-              ) : item.kind === "assistant" ? (
-                <AssistantMessage line={item} />
-              ) : item.kind === "tool_call" ? (
-                <ToolCallMessage
-                  line={item}
-                  precomputedDiffs={precomputedDiffsRef.current}
-                  lastPlanFilePath={lastPlanFilePathRef.current}
-                />
-              ) : item.kind === "subagent_group" ? (
-                <SubagentGroupStatic agents={item.agents} />
-              ) : item.kind === "error" ? (
-                <ErrorMessage line={item} />
-              ) : item.kind === "status" ? (
-                <StatusMessage line={item} />
-              ) : item.kind === "event" ? (
-                !showCompactionsEnabled &&
-                item.eventType === "compaction" ? null : (
-                  <EventMessage line={item} />
-                )
-              ) : item.kind === "separator" ? (
-                <Box marginTop={1}>
-                  <Text dimColor>{"─".repeat(columns)}</Text>
-                </Box>
-              ) : item.kind === "command" ? (
-                <CommandMessage line={item} />
-              ) : item.kind === "bash_command" ? (
-                <BashCommandMessage line={item} />
-              ) : item.kind === "trajectory_summary" ? (
-                <TrajectorySummary line={item} />
-              ) : item.kind === "approval_preview" ? (
-                <ApprovalPreview
-                  toolName={item.toolName}
-                  toolArgs={item.toolArgs}
-                  precomputedDiff={item.precomputedDiff}
-                  allDiffs={precomputedDiffsRef.current}
-                  planContent={item.planContent}
-                  planFilePath={item.planFilePath}
-                  toolCallId={item.toolCallId}
-                />
-              ) : null}
-            </Box>
-          );
-        }}
-      </Static>
-
-      <Box flexDirection="column">
-        {/* Loading screen / intro text */}
-        {loadingState !== "ready" && (
-          <WelcomeScreen
-            loadingState={loadingState}
-            continueSession={continueSession}
-            agentState={agentState}
-          />
-        )}
-
-        {loadingState === "ready" && (
-          <>
-            {/* Transcript - wrapped in AnimationProvider for overflow-based animation control */}
-            <AnimationProvider shouldAnimate={shouldAnimate}>
-              {/* Show liveItems always - all approvals now render inline */}
-              {liveItems.length > 0 && (
-                <Box flexDirection="column">
-                  {liveItems.map((ln) => {
-                    const isFileTool =
-                      ln.kind === "tool_call" &&
-                      ln.name &&
-                      (isFileEditTool(ln.name) ||
-                        isFileWriteTool(ln.name) ||
-                        isPatchTool(ln.name));
-                    const isApprovalTracked =
-                      ln.kind === "tool_call" &&
-                      ln.toolCallId &&
-                      (ln.toolCallId === currentApproval?.toolCallId ||
-                        pendingIds.has(ln.toolCallId) ||
-                        queuedIds.has(ln.toolCallId));
-                    if (isFileTool && !isApprovalTracked) {
-                      return null;
-                    }
-                    // Skip Task tools that don't have a pending approval
-                    // They render as empty Boxes (ToolCallMessage returns null for non-finished Task tools)
-                    // which causes N blank lines when N Task tools are called in parallel
-                    // Note: pendingIds doesn't include the ACTIVE approval (currentApproval),
-                    // so we must also check if this is the active approval
-                    if (
-                      ln.kind === "tool_call" &&
-                      ln.name &&
-                      isTaskTool(ln.name) &&
-                      ln.toolCallId &&
-                      !pendingIds.has(ln.toolCallId) &&
-                      ln.toolCallId !== currentApproval?.toolCallId
-                    ) {
-                      return null;
-                    }
-
-                    // Check if this tool call matches the current approval awaiting user input
-                    const matchesCurrentApproval =
-                      ln.kind === "tool_call" &&
-                      currentApproval &&
-                      ln.toolCallId === currentApproval.toolCallId;
-
-                    return (
-                      <Box key={ln.id} flexDirection="column" marginTop={1}>
-                        {matchesCurrentApproval ? (
-                          <ApprovalSwitch
-                            approval={currentApproval}
-                            onApprove={handleApproveCurrent}
-                            onApproveAlways={handleApproveAlways}
-                            onDeny={handleDenyCurrent}
-                            onCancel={handleCancelApprovals}
-                            onPlanApprove={handlePlanApprove}
-                            onPlanKeepPlanning={handlePlanKeepPlanning}
-                            onQuestionSubmit={handleQuestionSubmit}
-                            onEnterPlanModeApprove={handleEnterPlanModeApprove}
-                            onEnterPlanModeReject={handleEnterPlanModeReject}
-                            precomputedDiff={
-                              ln.toolCallId
-                                ? precomputedDiffsRef.current.get(ln.toolCallId)
-                                : undefined
-                            }
-                            allDiffs={precomputedDiffsRef.current}
-                            isFocused={true}
-                            approveAlwaysText={
-                              currentApprovalContext?.approveAlwaysText
-                            }
-                            allowPersistence={
-                              currentApprovalContext?.allowPersistence ?? true
-                            }
-                            defaultScope={
-                              currentApprovalContext?.defaultScope === "user"
-                                ? "session"
-                                : (currentApprovalContext?.defaultScope ??
-                                  "project")
-                            }
-                            showPreview={showApprovalPreview}
-                            planContent={
-                              currentApproval.toolName === "ExitPlanMode"
-                                ? _readPlanFile()
-                                : undefined
-                            }
-                            planFilePath={
-                              currentApproval.toolName === "ExitPlanMode"
-                                ? (permissionMode.getPlanFilePath() ??
-                                  undefined)
-                                : undefined
-                            }
-                            agentName={agentName ?? undefined}
-                          />
-                        ) : ln.kind === "user" ? (
-                          <UserMessage line={ln} prompt={statusLine.prompt} />
-                        ) : ln.kind === "reasoning" ? (
-                          <ReasoningMessage line={ln} />
-                        ) : ln.kind === "assistant" ? (
-                          <AssistantMessage line={ln} />
-                        ) : ln.kind === "tool_call" &&
-                          ln.toolCallId &&
-                          queuedIds.has(ln.toolCallId) ? (
-                          // Render stub for queued (decided but not executed) approval
-                          <PendingApprovalStub
-                            toolName={
-                              approvalMap.get(ln.toolCallId)?.toolName ||
-                              ln.name ||
-                              "Unknown"
-                            }
-                            description={stubDescriptions.get(ln.toolCallId)}
-                            decision={queuedDecisions.get(ln.toolCallId)}
-                          />
-                        ) : ln.kind === "tool_call" &&
-                          ln.toolCallId &&
-                          pendingIds.has(ln.toolCallId) ? (
-                          // Render stub for pending (undecided) approval
-                          <PendingApprovalStub
-                            toolName={
-                              approvalMap.get(ln.toolCallId)?.toolName ||
-                              ln.name ||
-                              "Unknown"
-                            }
-                            description={stubDescriptions.get(ln.toolCallId)}
-                          />
-                        ) : ln.kind === "tool_call" ? (
-                          <ToolCallMessage
-                            line={ln}
-                            precomputedDiffs={precomputedDiffsRef.current}
-                            lastPlanFilePath={lastPlanFilePathRef.current}
-                            isStreaming={streaming}
-                          />
-                        ) : ln.kind === "error" ? (
-                          <ErrorMessage line={ln} />
-                        ) : ln.kind === "status" ? (
-                          <StatusMessage line={ln} />
-                        ) : ln.kind === "event" ? (
-                          <EventMessage line={ln} />
-                        ) : ln.kind === "command" ? (
-                          <CommandMessage line={ln} />
-                        ) : ln.kind === "bash_command" ? (
-                          <BashCommandMessage line={ln} />
-                        ) : null}
-                      </Box>
-                    );
-                  })}
-                </Box>
-              )}
-
-              {/* Fallback approval UI when backfill is disabled (no liveItems) */}
-              {liveItems.length === 0 && currentApproval && (
-                <Box flexDirection="column">
-                  <ApprovalSwitch
-                    approval={currentApproval}
-                    onApprove={handleApproveCurrent}
-                    onApproveAlways={handleApproveAlways}
-                    onDeny={handleDenyCurrent}
-                    onCancel={handleCancelApprovals}
-                    onPlanApprove={handlePlanApprove}
-                    onPlanKeepPlanning={handlePlanKeepPlanning}
-                    onQuestionSubmit={handleQuestionSubmit}
-                    onEnterPlanModeApprove={handleEnterPlanModeApprove}
-                    onEnterPlanModeReject={handleEnterPlanModeReject}
-                    allDiffs={precomputedDiffsRef.current}
-                    isFocused={true}
-                    approveAlwaysText={
-                      currentApprovalContext?.approveAlwaysText
-                    }
-                    allowPersistence={
-                      currentApprovalContext?.allowPersistence ?? true
-                    }
-                    defaultScope={
-                      currentApprovalContext?.defaultScope === "user"
-                        ? "session"
-                        : (currentApprovalContext?.defaultScope ?? "project")
-                    }
-                    showPreview={showApprovalPreview}
-                    planContent={
-                      currentApproval.toolName === "ExitPlanMode"
-                        ? _readPlanFile()
-                        : undefined
-                    }
-                    planFilePath={
-                      currentApproval.toolName === "ExitPlanMode"
-                        ? (permissionMode.getPlanFilePath() ?? undefined)
-                        : undefined
-                    }
-                    agentName={agentName ?? undefined}
+            return (
+              <Box
+                key={item.id}
+                marginTop={index > 0 && !isContinuationLine ? 1 : 0}
+              >
+                {item.kind === "welcome" ? (
+                  <WelcomeScreen loadingState="ready" {...item.snapshot} />
+                ) : item.kind === "user" ? (
+                  <UserMessage line={item} prompt={statusLine.prompt} />
+                ) : item.kind === "reasoning" ? (
+                  <ReasoningMessage line={item} />
+                ) : item.kind === "assistant" ? (
+                  <AssistantMessage line={item} />
+                ) : item.kind === "tool_call" ? (
+                  <ToolCallMessage
+                    line={item}
+                    precomputedDiffs={precomputedDiffsRef.current}
+                    lastPlanFilePath={lastPlanFilePathRef.current}
                   />
                 ) : item.kind === "subagent_group" ? (
                   <SubagentGroupStatic agents={item.agents} />
@@ -13313,9 +13076,6 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                 {liveItems.length > 0 && (
                   <Box flexDirection="column">
                     {liveItems.map((ln) => {
-                      const isContinuationLine =
-                        (ln.kind === "assistant" || ln.kind === "reasoning") &&
-                        ln.isContinuation;
                       const isFileTool =
                         ln.kind === "tool_call" &&
                         ln.name &&
@@ -13354,11 +13114,7 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                         ln.toolCallId === currentApproval.toolCallId;
 
                       return (
-                        <Box
-                          key={ln.id}
-                          flexDirection="column"
-                          marginTop={isContinuationLine ? 0 : 1}
-                        >
+                        <Box key={ln.id} flexDirection="column" marginTop={1}>
                           {matchesCurrentApproval ? (
                             <ApprovalSwitch
                               approval={currentApproval}
@@ -13395,6 +13151,18 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                                     "project")
                               }
                               showPreview={showApprovalPreview}
+                              planContent={
+                                currentApproval.toolName === "ExitPlanMode"
+                                  ? _readPlanFile()
+                                  : undefined
+                              }
+                              planFilePath={
+                                currentApproval.toolName === "ExitPlanMode"
+                                  ? (permissionMode.getPlanFilePath() ??
+                                    undefined)
+                                  : undefined
+                              }
+                              agentName={agentName ?? undefined}
                             />
                           ) : ln.kind === "user" ? (
                             <UserMessage line={ln} prompt={statusLine.prompt} />
@@ -13479,6 +13247,17 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                           : (currentApprovalContext?.defaultScope ?? "project")
                       }
                       showPreview={showApprovalPreview}
+                      planContent={
+                        currentApproval.toolName === "ExitPlanMode"
+                          ? _readPlanFile()
+                          : undefined
+                      }
+                      planFilePath={
+                        currentApproval.toolName === "ExitPlanMode"
+                          ? (permissionMode.getPlanFilePath() ?? undefined)
+                          : undefined
+                      }
+                      agentName={agentName ?? undefined}
                     />
                   </Box>
                 )}
@@ -14124,225 +13903,11 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                       setStaticItems([]);
                       setStaticRenderEpoch((e) => e + 1);
                       resetTrajectoryBases();
-                      // Backfill message history with visual separator
-                      if (resumeData.messageHistory.length > 0) {
-                        hasBackfilledRef.current = false;
-                        backfillBuffers(
-                          buffersRef.current,
-                          resumeData.messageHistory,
-                        );
-                        // Collect backfilled items
-                        const backfilledItems: StaticItem[] = [];
-                        for (const id of buffersRef.current.order) {
-                          const ln = buffersRef.current.byId.get(id);
-                          if (!ln) continue;
-                          emittedIdsRef.current.add(id);
-                          backfilledItems.push({ ...ln } as StaticItem);
-                        }
-                        // Add separator before backfilled messages, then success at end
-                        const separator = {
-                          kind: "separator" as const,
-                          id: uid("sep"),
-                        };
-                        setStaticItems([
-                          separator,
-                          ...backfilledItems,
-                          successItem,
-                        ]);
-                        setLines(toLines(buffersRef.current));
-                        hasBackfilledRef.current = true;
-                      } else {
-                        // Add separator for visual spacing even without backfill
-                        const separator = {
-                          kind: "separator" as const,
-                          id: uid("sep"),
-                        };
-                        setStaticItems([separator, successItem]);
-                        setLines(toLines(buffersRef.current));
-                      }
-
-                      // Restore pending approvals if any (fixes #540 for ConversationSelector)
-                      if (resumeData.pendingApprovals.length > 0) {
-                        setPendingApprovals(resumeData.pendingApprovals);
-
-                        // Analyze approval contexts (same logic as startup)
-                        try {
-                          const contexts = await Promise.all(
-                            resumeData.pendingApprovals.map(
-                              async (approval) => {
-                                const parsedArgs = safeJsonParseOr<
-                                  Record<string, unknown>
-                                >(approval.toolArgs, {});
-                                return await analyzeToolApproval(
-                                  approval.toolName,
-                                  parsedArgs,
-                                );
-                              },
-                            ),
-                          );
-                          setApprovalContexts(contexts);
-                        } catch (approvalError) {
-                          // If analysis fails, leave context as null (will show basic options)
-                          debugLog(
-                            "approvals",
-                            "Failed to analyze resume approvals: %O",
-                            approvalError,
-                          );
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    // Update existing loading message instead of creating new one
-                    // Format error message to be user-friendly (avoid raw JSON/internal details)
-                    let errorMsg = "Unknown error";
-                    if (error instanceof APIError) {
-                      if (error.status === 404) {
-                        errorMsg = "Conversation not found";
-                      } else if (error.status === 422) {
-                        errorMsg = "Invalid conversation ID";
-                      } else {
-                        errorMsg = error.message;
-                      }
-                    } else if (error instanceof Error) {
-                      errorMsg = error.message;
-                    }
-                    cmd.fail(`Failed to switch conversation: ${errorMsg}`);
-                  } finally {
-                    setCommandRunning(false);
-                  }
-                }}
-                onNewConversation={async () => {
-                  const overlayCommand = consumeOverlayCommand("conversations");
-                  closeOverlay();
-
-                  // Lock input for async operation
-                  setCommandRunning(true);
-
-                  const cmd =
-                    overlayCommand ??
-                    commandRunner.start(
-                      "/resume",
-                      "Creating new conversation...",
-                    );
-                  cmd.update({
-                    output: "Creating new conversation...",
-                    phase: "running",
-                  });
-
-                  try {
-                    // Create a new conversation
-                    const client = await getClient();
-
-                    // Letta requires isolated block labels to exist on the base agent.
-                    const { ensureIsolatedBlockLabels } = await import(
-                      "../agent/isolatedBlocks"
-                    );
-                    await ensureIsolatedBlockLabels(
-                      client,
-                      agentId,
-                      ISOLATED_BLOCK_LABELS,
-                    );
-
-                    // Back-compat: older flows may still reference the legacy label.
-                    const { LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL } =
-                      await import("../agent/memory");
-                    await ensureIsolatedBlockLabels(client, agentId, [
-                      LEGACY_EPHEMERAL_CONTEXT_BLOCK_LABEL,
-                    ]);
-
-                    const conversation = await client.conversations.create({
-                      agent_id: agentId,
-                      isolated_block_labels: [...ISOLATED_BLOCK_LABELS],
-                    });
-                    setConversationId(conversation.id);
-                    settingsManager.setLocalLastSession(
-                      { agentId, conversationId: conversation.id },
-                      process.cwd(),
-                    );
-                    settingsManager.setGlobalLastSession({
-                      agentId,
-                      conversationId: conversation.id,
-                    });
-
-                    // Build success command with agent + conversation info
-                    const currentAgentName =
-                      agentState?.name || "Unnamed Agent";
-                    const shortConvId = conversation.id.slice(0, 20);
-                    const successLines = [
-                      `Started new conversation with "${currentAgentName}"`,
-                      `⎿  Agent: ${agentId}`,
-                      `⎿  Conversation: ${shortConvId}... (new)`,
-                    ];
-                    const successOutput = successLines.join("\n");
-                    cmd.finish(successOutput, true);
-                    const successItem: StaticItem = {
-                      kind: "command",
-                      id: cmd.id,
-                      input: cmd.input,
-                      output: successOutput,
-                      phase: "finished",
-                      success: true,
-                    };
-
-                    // Clear current transcript and static items
-                    buffersRef.current.byId.clear();
-                    buffersRef.current.order = [];
-                    buffersRef.current.tokenCount = 0;
-                    resetContextHistory(contextTrackerRef.current);
-                    resetBootstrapReminderState();
-                    emittedIdsRef.current.clear();
-                    resetDeferredToolCallCommits();
-                    setStaticItems([]);
-                    setStaticRenderEpoch((e) => e + 1);
-                    resetTrajectoryBases();
-                    setStaticItems([successItem]);
-                    setLines(toLines(buffersRef.current));
-                  } catch (error) {
-                    cmd.fail(
-                      `Failed to create conversation: ${error instanceof Error ? error.message : String(error)}`,
-                    );
-                  } finally {
-                    setCommandRunning(false);
-                  }
-                }}
-                onCancel={closeOverlay}
-              />
-            )}
-
-            {/* Message Search - conditionally mounted as overlay */}
-            {activeOverlay === "search" && (
-              <MessageSearch
-                onClose={closeOverlay}
-                initialQuery={searchQuery || undefined}
-                agentId={agentId}
-                conversationId={conversationId}
-                onOpenConversation={async (
-                  targetAgentId,
-                  targetConvId,
-                  searchContext,
-                ) => {
-                  const overlayCommand = consumeOverlayCommand("search");
-                  closeOverlay();
-
-                  // Different agent: use handleAgentSelect (which supports optional conversationId)
-                  if (targetAgentId !== agentId) {
-                    await handleAgentSelect(targetAgentId, {
-                      conversationId: targetConvId,
-                      commandId: overlayCommand?.id,
-                    });
-                    return;
-                  }
-
-                  // Normalize undefined/null to "default"
-                  const actualTargetConv = targetConvId || "default";
-
-                  // Same agent, same conversation: nothing to do
-                  if (actualTargetConv === conversationId) {
-                    const cmd =
-                      overlayCommand ??
-                      commandRunner.start(
-                        "/search",
-                        "Already on this conversation",
+                      setStaticItems([successItem]);
+                      setLines(toLines(buffersRef.current));
+                    } catch (error) {
+                      cmd.fail(
+                        `Failed to create conversation: ${error instanceof Error ? error.message : String(error)}`,
                       );
                     } finally {
                       setCommandRunning(false);
@@ -14557,9 +14122,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                     } finally {
                       setCommandRunning(false);
                     }
-                }}
-              />
-            )}
+                  }}
+                />
+              )}
 
               {/* Feedback Dialog - conditionally mounted as overlay */}
               {activeOverlay === "feedback" && (

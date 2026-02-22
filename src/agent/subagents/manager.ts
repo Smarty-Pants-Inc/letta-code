@@ -118,6 +118,86 @@ function getProviderPrefix(handle: string): string | null {
   return handle.slice(0, slashIndex);
 }
 
+export type SubagentLauncher = { command: string; args: string[] };
+
+function stripOuterQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+// Exported for tests.
+export function resolveSubagentLauncher(
+  cliArgs: string[],
+  ctx: {
+    env: NodeJS.ProcessEnv;
+    argv: string[];
+    execPath: string;
+    platform: NodeJS.Platform;
+  },
+): SubagentLauncher {
+  const envCmdRaw = ctx.env.LETTA_CODE_BIN?.trim();
+  if (envCmdRaw) {
+    const cmd = stripOuterQuotes(envCmdRaw);
+    const args: string[] = [];
+
+    const explicitArgsJson = ctx.env.LETTA_CODE_BIN_ARGS_JSON?.trim();
+    if (explicitArgsJson) {
+      try {
+        const parsed = JSON.parse(explicitArgsJson) as unknown;
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((v) => typeof v === "string")
+        ) {
+          args.push(...(parsed as string[]));
+        }
+      } catch {
+        // Ignore malformed JSON.
+      }
+    }
+
+    args.push(...cliArgs);
+    return { command: cmd, args };
+  }
+
+  const currentScript = ctx.argv[1] || "";
+  const runtime = ctx.execPath || ctx.argv[0] || "bun";
+
+  if (currentScript.endsWith(".js")) {
+    if (ctx.platform === "win32") {
+      return { command: runtime, args: [currentScript, ...cliArgs] };
+    }
+    return { command: currentScript, args: [...cliArgs] };
+  }
+
+  // When running from source (via Bun), include loader flags so markdown prompt
+  // assets are treated as text.
+  if (currentScript.includes("src/index.ts")) {
+    return {
+      command: runtime,
+      args: [
+        "--loader=.md:text",
+        "--loader=.mdx:text",
+        "--loader=.txt:text",
+        currentScript,
+        ...cliArgs,
+      ],
+    };
+  }
+
+  if (currentScript.endsWith(".ts")) {
+    return { command: runtime, args: [currentScript, ...cliArgs] };
+  }
+
+  return { command: "letta", args: [...cliArgs] };
+}
+
 function swapProviderPrefix(
   parentHandle: string,
   recommendedHandle: string,
@@ -606,58 +686,12 @@ async function executeSubagent(
       hasUserModelOverride,
     );
 
-    const currentScript = process.argv[1] || "";
-
-    // Spawn Letta Code in headless mode.
-    // Prefer using the same entrypoint/runtime as the current process:
-    // 1. LETTA_CODE_BIN env var (explicit override; should be an executable)
-    // 2. Current process argv[1] if it's a .js file (built letta.js)
-    // 3. If running from source (src/index.ts), respawn via the current runtime
-    //    (e.g. bun) and pass the script path explicitly.
-    // 4. "letta" (global install)
-    let lettaCmd = process.env.LETTA_CODE_BIN || "";
-    const lettaCmdArgsPrefix: string[] = [];
-
-    // Allow callers (e.g. wrapper scripts) to provide a stable invocation for
-    // spawning Letta Code child processes.
-    //
-    // Example: LETTA_CODE_BIN=bun and LETTA_CODE_BIN_ARGS_JSON='["--loader=...","run","/path/to/index.ts"]'
-    const explicitArgsJson = process.env.LETTA_CODE_BIN_ARGS_JSON?.trim();
-    if (lettaCmd && explicitArgsJson) {
-      try {
-        const parsed = JSON.parse(explicitArgsJson) as unknown;
-        if (
-          Array.isArray(parsed) &&
-          parsed.every((v) => typeof v === "string")
-        ) {
-          lettaCmdArgsPrefix.push(...(parsed as string[]));
-        }
-      } catch {
-        // Ignore malformed JSON and fall back to spawning without a prefix.
-      }
-    }
-
-    if (!lettaCmd) {
-      if (currentScript.endsWith(".js")) {
-        lettaCmd = currentScript;
-      } else if (currentScript.includes("src/index.ts")) {
-        // When running from source (via Bun), we must respawn via Bun and include the
-        // same loader flags used by our wrapper; otherwise Bun will try to parse
-        // imported markdown prompt assets as JS and crash immediately.
-        //
-        // This also fixes a common failure mode where previous logic tried to spawn
-        // `./letta.js` relative to the user's cwd (often missing).
-        lettaCmd = process.argv[0] || "bun";
-        lettaCmdArgsPrefix.push(
-          "--loader=.md:text",
-          "--loader=.mdx:text",
-          "--loader=.txt:text",
-          currentScript,
-        );
-      } else {
-        lettaCmd = "letta";
-      }
-    }
+    const launcher = resolveSubagentLauncher(cliArgs, {
+      env: process.env,
+      argv: process.argv,
+      execPath: process.execPath || process.argv[0] || "bun",
+      platform: process.platform,
+    });
     // Pass parent agent ID so subagents can access parent's context (e.g., search history)
     let parentAgentId: string | undefined;
     try {
@@ -674,7 +708,7 @@ async function executeSubagent(
     const inheritedBaseUrl =
       process.env.LETTA_BASE_URL || settings.env?.LETTA_BASE_URL;
 
-    const proc = spawn(lettaCmd, [...lettaCmdArgsPrefix, ...cliArgs], {
+    const proc = spawn(launcher.command, launcher.args, {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -686,6 +720,9 @@ async function executeSubagent(
         ...(parentAgentId && { LETTA_PARENT_AGENT_ID: parentAgentId }),
       },
     });
+
+    // Capture spawn errors so we can surface them even if stderr is empty.
+    let spawnError: unknown = null;
 
     // Set up abort handler to kill the child process
     let wasAborted = false;
@@ -727,7 +764,10 @@ async function executeSubagent(
     // Wait for process to complete
     const exitCode = await new Promise<number | null>((resolve) => {
       proc.on("close", resolve);
-      proc.on("error", () => resolve(null));
+      proc.on("error", (err) => {
+        spawnError = err;
+        resolve(null);
+      });
     });
 
     // Clean up abort listener
