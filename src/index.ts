@@ -1756,7 +1756,11 @@ async function main(): Promise<void> {
             // Always apply model update - different model IDs can share the same
             // handle but have different settings (e.g., gpt-5.2-medium vs gpt-5.2-xhigh)
             const updateArgs = getModelUpdateArgs(model);
-            agent = await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+            agent = await updateAgentLLMConfig(
+              agent.id,
+              modelHandle,
+              updateArgs,
+            );
 
             if (!toolset) {
               const { forceToolsetSwitch } = await import("./tools/toolset");
