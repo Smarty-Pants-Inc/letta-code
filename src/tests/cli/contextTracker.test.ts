@@ -18,7 +18,7 @@ describe("contextTracker", () => {
 
     resetContextHistory(tracker);
 
-    expect(tracker.lastContextTokens).toBe(0);
+    expect(tracker.lastContextTokens).toBeNull();
     expect(tracker.contextTokensHistory).toEqual([]);
     expect(tracker.pendingCompaction).toBe(false);
     expect(tracker.pendingSkillsReinject).toBe(false);
