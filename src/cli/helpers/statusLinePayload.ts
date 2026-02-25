@@ -16,12 +16,9 @@ export interface StatusLinePayloadBuildInput {
   totalOutputTokens?: number;
   contextWindowSize?: number;
   usedContextTokens?: number | null;
-  reasoningEffort?: string | null;
   permissionMode?: string;
   networkPhase?: "upload" | "download" | "error" | null;
   terminalWidth?: number;
-  systemPromptId?: string | null;
-  toolset?: string | null;
 }
 
 /**
@@ -46,7 +43,6 @@ export interface StatusLinePayload {
     id: string | null;
     display_name: string | null;
   };
-  reasoning_effort: string | null;
   output_style: {
     name: string | null;
   };
@@ -80,8 +76,6 @@ export interface StatusLinePayload {
   permission_mode: string | null;
   network_phase: "upload" | "download" | "error" | null;
   terminal_width: number | null;
-  system_prompt_id: string | null;
-  toolset: string | null;
 }
 
 export function calculateContextPercentages(
@@ -143,7 +137,6 @@ export function buildStatusLinePayload(
       id: input.modelId ?? null,
       display_name: input.modelDisplayName ?? null,
     },
-    reasoning_effort: input.reasoningEffort ?? null,
     output_style: {
       name: null,
     },
@@ -170,7 +163,5 @@ export function buildStatusLinePayload(
     permission_mode: input.permissionMode ?? null,
     network_phase: input.networkPhase ?? null,
     terminal_width: input.terminalWidth ?? null,
-    system_prompt_id: input.systemPromptId ?? null,
-    toolset: input.toolset ?? null,
   };
 }
