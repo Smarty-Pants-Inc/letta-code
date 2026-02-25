@@ -205,6 +205,22 @@ const _colors = {
   // Footer bar
   footer: {
     agentName: brandColors.primaryAccent,
+    // Provider color used for the model label and s:/t: values in the footer.
+    provider: {
+      // Keep codex teal to match the Codex BYOK indicator.
+      codex: "#74AA9C",
+      claude: brandColors.primaryAccent,
+      gemini: brandColors.orange,
+      unknown: brandColors.textSecondary,
+    },
+    // Reasoning tier tag color.
+    reasoning: {
+      minimal: brandColors.statusSuccess,
+      low: brandColors.statusSuccess,
+      medium: brandColors.statusWarning,
+      high: brandColors.orange,
+      max: brandColors.statusError,
+    },
   },
 
   // Context window breakdown categories
