@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 interface ValidationResult {
@@ -162,10 +163,14 @@ export function validateSkill(skillPath: string): ValidationResult {
 }
 
 // CLI entry point
-if (require.main === module) {
+// NOTE: These scripts are commonly run via `npx tsx ...` which executes them
+// as ESM. `require.main` is not available in ESM, so we use an import.meta.url
+// based check.
+const _isMain = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+if (_isMain) {
   const args = process.argv.slice(2);
   if (args.length !== 1) {
-    console.log("Usage: npx ts-node validate-skill.ts <skill-directory>");
+    console.log("Usage: npx tsx validate-skill.ts <skill-directory>");
     process.exit(1);
   }
 

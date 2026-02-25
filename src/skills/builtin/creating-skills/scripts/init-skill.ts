@@ -12,6 +12,7 @@
 
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const SKILL_TEMPLATE = `---
 name: {skill_name}
@@ -248,20 +249,24 @@ function initSkill(skillName: string, path: string): string | null {
 }
 
 // CLI entry point
-if (require.main === module) {
+// NOTE: These scripts are commonly run via `npx tsx ...` which executes them
+// as ESM. `require.main` is not available in ESM, so we use an import.meta.url
+// based check.
+const _isMain = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+if (_isMain) {
   const args = process.argv.slice(2);
 
   if (args.length < 3 || args[1] !== "--path") {
-    console.log("Usage: npx ts-node init-skill.ts <skill-name> --path <path>");
+    console.log("Usage: npx tsx init-skill.ts <skill-name> --path <path>");
     console.log("\nSkill name requirements:");
     console.log("  - Hyphen-case identifier (e.g., 'data-analyzer')");
     console.log("  - Lowercase letters, digits, and hyphens only");
     console.log("  - Max 64 characters");
     console.log("  - Must match directory name exactly");
     console.log("\nExamples:");
-    console.log("  npx ts-node init-skill.ts my-new-skill --path .skills");
+    console.log("  npx tsx init-skill.ts my-new-skill --path .skills");
     console.log(
-      "  npx ts-node init-skill.ts my-api-helper --path ~/.letta/skills",
+      "  npx tsx init-skill.ts my-api-helper --path ~/.letta/skills",
     );
     process.exit(1);
   }
