@@ -227,6 +227,8 @@ const InputFooter = memo(function InputFooter({
   agentName,
   currentModel,
   currentReasoningEffort,
+  currentSystemPromptId,
+  currentToolset,
   isOpenAICodexProvider,
   isByokProvider,
   hideFooter,
@@ -246,6 +248,8 @@ const InputFooter = memo(function InputFooter({
   agentName: string | null | undefined;
   currentModel: string | null | undefined;
   currentReasoningEffort?: ModelReasoningEffort | null;
+  currentSystemPromptId?: string | null;
+  currentToolset?: string | null;
   isOpenAICodexProvider: boolean;
   isByokProvider: boolean;
   hideFooter: boolean;
@@ -261,23 +265,106 @@ const InputFooter = memo(function InputFooter({
   const reasoningTag = getReasoningEffortTag(currentReasoningEffort);
   const byokExtraChars = isByokProvider ? 2 : 0; // " ▲"
 
-  const baseReservedChars = displayAgentName.length + byokExtraChars + 4;
-  const modelWithReasoning =
-    (currentModel ?? "unknown") + (reasoningTag ? ` (${reasoningTag})` : "");
+  const extrasPlainParts = useMemo(() => {
+    const out: Array<{ label: "s" | "t"; value: string }> = [];
+    if (currentSystemPromptId) {
+      out.push({ label: "s", value: currentSystemPromptId });
+    }
+    if (currentToolset) {
+      out.push({ label: "t", value: currentToolset });
+    }
+    return out;
+  }, [currentSystemPromptId, currentToolset]);
 
-  const maxModelChars = Math.max(8, rightColumnWidth - baseReservedChars);
-  const displayModel = truncateEnd(modelWithReasoning, maxModelChars);
+  // Reserve a small budget so s:/t: remain visible even on narrower terminals.
+  const minExtrasBudget = extrasPlainParts.length * 4; // " s:x" / " t:y"
 
-  const rightTextLength =
-    displayAgentName.length + displayModel.length + byokExtraChars + 3;
+  const providerKey: "codex" | "claude" | "gemini" | "unknown" =
+    currentToolset?.includes("codex")
+      ? "codex"
+      : currentToolset?.includes("gemini")
+        ? "gemini"
+        : currentToolset && currentToolset !== "none"
+          ? "claude"
+          : currentSystemPromptId?.includes("codex")
+            ? "codex"
+            : currentSystemPromptId?.includes("gemini")
+              ? "gemini"
+              : currentSystemPromptId &&
+                  currentSystemPromptId !== "custom" &&
+                  currentSystemPromptId !== "default"
+                ? "claude"
+                : "unknown";
+
+  const providerColor = colors.footer.provider[providerKey];
+  const reasoningColor =
+    reasoningTag === "minimal"
+      ? colors.footer.reasoning.minimal
+      : reasoningTag === "low"
+        ? colors.footer.reasoning.low
+        : reasoningTag === "medium"
+          ? colors.footer.reasoning.medium
+          : reasoningTag === "high"
+            ? colors.footer.reasoning.high
+            : reasoningTag === "max"
+              ? colors.footer.reasoning.max
+              : null;
+
+  const reasoningSuffix = reasoningTag ? ` (${reasoningTag})` : "";
+  const reservedChars = displayAgentName.length + byokExtraChars + 4;
+  const maxModelNameChars = Math.max(
+    8,
+    rightColumnWidth - reservedChars - minExtrasBudget - reasoningSuffix.length,
+  );
+  const displayModelName = truncateEnd(
+    currentModel ?? "unknown",
+    maxModelNameChars,
+  );
+  const displayModelPlain = displayModelName + reasoningSuffix;
+
+  const baseLen =
+    displayAgentName.length + displayModelPlain.length + byokExtraChars + 3;
+  const maxExtrasLen = Math.max(0, rightColumnWidth - baseLen);
+
+  const extrasRendered = useMemo(() => {
+    if (maxExtrasLen <= 0)
+      return [] as Array<{ label: "s" | "t"; value: string }>;
+
+    let remaining = maxExtrasLen;
+    const out: Array<{ label: "s" | "t"; value: string }> = [];
+    for (const part of extrasPlainParts) {
+      // " s:" or " t:"
+      const labelLen = 3;
+      if (remaining <= labelLen) break;
+      const maxValueLen = remaining - labelLen;
+      const value = truncateEnd(part.value, maxValueLen);
+      if (!value) break;
+      out.push({ label: part.label, value });
+      remaining -= labelLen + value.length;
+    }
+    return out;
+  }, [extrasPlainParts, maxExtrasLen]);
+
+  const extrasLen = extrasRendered.reduce(
+    (sum, extra) => sum + 3 + extra.value.length,
+    0,
+  );
+
+  const rightTextLength = baseLen + extrasLen;
   const rightPrefixSpaces = Math.max(0, rightColumnWidth - rightTextLength);
   const rightLabel = useMemo(() => {
     const parts: string[] = [];
     parts.push(" ".repeat(rightPrefixSpaces));
     parts.push(chalk.hex(colors.footer.agentName)(displayAgentName));
     parts.push(chalk.dim(" ["));
-    // Keep model label colorful even when statusline is enabled.
-    parts.push(chalk.hex(colors.selector.title)(displayModel));
+    parts.push(chalk.hex(providerColor)(displayModelName));
+    if (reasoningTag) {
+      parts.push(chalk.dim(" ("));
+      parts.push(
+        reasoningColor ? chalk.hex(reasoningColor)(reasoningTag) : reasoningTag,
+      );
+      parts.push(chalk.dim(")"));
+    }
     if (isByokProvider) {
       parts.push(chalk.dim(" "));
       parts.push(
@@ -286,13 +373,29 @@ const InputFooter = memo(function InputFooter({
     }
     parts.push(chalk.dim("]"));
 
+    // Append system/toolset on the same line (grey labels, colored values).
+    for (const extra of extrasRendered) {
+      if (extra.label === "s") {
+        parts.push(chalk.dim(" s:"));
+      } else {
+        parts.push(chalk.dim(" t:"));
+      }
+
+      // Use the same provider color as the model label so model/system/toolset
+      // read as one cohesive "current stack".
+      parts.push(chalk.hex(providerColor)(extra.value));
+    }
     return parts.join("");
   }, [
     rightPrefixSpaces,
     displayAgentName,
-    displayModel,
+    providerColor,
+    displayModelName,
+    reasoningTag,
+    reasoningColor,
     isByokProvider,
     isOpenAICodexProvider,
+    extrasRendered,
   ]);
 
   // Avoid double-printing: many status line commands already include agent/model
