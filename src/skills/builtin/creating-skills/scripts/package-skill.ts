@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 // Simple zip implementation using Node.js built-in zlib
 // For a proper zip file, we'll create the structure manually
 import { deflateSync } from "node:zlib";
@@ -239,16 +240,20 @@ function packageSkill(skillPath: string, outputDir?: string): string | null {
 }
 
 // CLI entry point
-if (require.main === module) {
+// NOTE: These scripts are commonly run via `npx tsx ...` which executes them
+// as ESM. `require.main` is not available in ESM, so we use an import.meta.url
+// based check.
+const _isMain = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+if (_isMain) {
   const args = process.argv.slice(2);
 
   if (args.length < 1) {
     console.log(
-      "Usage: npx ts-node package-skill.ts <path/to/skill-folder> [output-directory]",
+      "Usage: npx tsx package-skill.ts <path/to/skill-folder> [output-directory]",
     );
     console.log("\nExample:");
-    console.log("  npx ts-node package-skill.ts .skills/my-skill");
-    console.log("  npx ts-node package-skill.ts .skills/my-skill ./dist");
+    console.log("  npx tsx package-skill.ts .skills/my-skill");
+    console.log("  npx tsx package-skill.ts .skills/my-skill ./dist");
     process.exit(1);
   }
 
