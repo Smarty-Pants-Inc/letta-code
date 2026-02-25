@@ -34,12 +34,9 @@ export interface StatusLineInputs {
   totalOutputTokens?: number;
   contextWindowSize?: number;
   usedContextTokens?: number | null;
-  reasoningEffort?: string | null;
   permissionMode?: string;
   networkPhase?: "upload" | "download" | "error" | null;
   terminalWidth?: number;
-  systemPromptId?: string | null;
-  toolset?: string | null;
   triggerVersion: number;
 }
 
@@ -73,12 +70,9 @@ function toPayloadInput(inputs: StatusLineInputs): StatusLinePayloadBuildInput {
     totalOutputTokens: inputs.totalOutputTokens,
     contextWindowSize: inputs.contextWindowSize,
     usedContextTokens: inputs.usedContextTokens,
-    reasoningEffort: inputs.reasoningEffort,
     permissionMode: inputs.permissionMode,
     networkPhase: inputs.networkPhase,
     terminalWidth: inputs.terminalWidth,
-    systemPromptId: inputs.systemPromptId,
-    toolset: inputs.toolset,
   };
 }
 

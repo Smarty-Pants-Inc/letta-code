@@ -2625,7 +2625,6 @@ export default function App({
   const statusLine = useConfigurableStatusLine({
     modelId: llmConfigRef.current?.model ?? null,
     modelDisplayName: currentModelDisplay,
-    reasoningEffort: currentReasoningEffort,
     systemPromptId: currentSystemPromptId,
     toolset: currentToolset,
     currentDirectory: process.cwd(),
@@ -7638,7 +7637,6 @@ export default function App({
                   buildStatusLinePayload({
                     modelId: llmConfigRef.current?.model ?? null,
                     modelDisplayName: currentModelDisplay,
-                    reasoningEffort: currentReasoningEffort,
                     systemPromptId: currentSystemPromptId,
                     toolset: currentToolset,
                     currentDirectory: wd,
