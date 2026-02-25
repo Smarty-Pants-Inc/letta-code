@@ -164,6 +164,23 @@ export const AgentInfoBar = memo(function AgentInfoBar({
         </Box>
       </Box>
 
+      {/*
+        Keep usage on its own line so terminal linkifiers don't merge adjacent links,
+        but place it *after* the 3-line alien art so the art stays contiguous.
+      */}
+      {isCloudUser && (
+        <Box>
+          <Text color={colors.footer.agentName}>{alienLines[3]}</Text>
+          <Box width={rightWidth} flexShrink={1}>
+            <Text dimColor wrap="truncate-end">
+              {truncateText(
+                "Usage: https://app.letta.com/settings/organization/usage",
+                rightWidth,
+              )}
+            </Text>
+          </Box>
+        </Box>
+      )}
       {/* Agent ID */}
       <Box>
         <Text>{alienLines[3]}</Text>
