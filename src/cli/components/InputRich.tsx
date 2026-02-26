@@ -734,6 +734,8 @@ export function Input({
   currentModel,
   currentModelProvider,
   currentReasoningEffort,
+  currentSystemPromptId,
+  currentToolset,
   messageQueue,
   onEnterQueueEditMode,
   onEscapeCancel,
@@ -776,6 +778,8 @@ export function Input({
   currentModel?: string | null;
   currentModelProvider?: string | null;
   currentReasoningEffort?: ModelReasoningEffort | null;
+  currentSystemPromptId?: string | null;
+  currentToolset?: string | null;
   messageQueue?: QueuedMessage[];
   onEnterQueueEditMode?: () => void;
   onEscapeCancel?: () => void;
@@ -1685,6 +1689,8 @@ export function Input({
                 agentName={agentName}
                 currentModel={currentModel}
                 currentReasoningEffort={currentReasoningEffort}
+                currentSystemPromptId={currentSystemPromptId}
+                currentToolset={currentToolset}
                 isOpenAICodexProvider={
                   currentModelProvider === OPENAI_CODEX_PROVIDER_NAME
                 }
@@ -1737,6 +1743,8 @@ export function Input({
     currentModel,
     currentReasoningEffort,
     currentModelProvider,
+    currentSystemPromptId,
+    currentToolset,
     hideFooter,
     footerRightColumnWidth,
     reserveInputSpace,
