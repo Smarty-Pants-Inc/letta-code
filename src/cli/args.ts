@@ -268,6 +268,9 @@ export const CLI_FLAG_CATALOG = {
       description: "Sleeptime step-count interval (positive integer)",
     },
   },
+  // Headless-only: JSON updateArgs payload for model settings.
+  // Used by subagent presets and internal tooling.
+  "update-args": { parser: { type: "string" }, mode: "headless" },
   "max-turns": { parser: { type: "string" }, mode: "headless" },
 } as const satisfies Record<string, CliFlagDefinition>;
 
