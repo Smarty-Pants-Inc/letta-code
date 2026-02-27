@@ -8326,6 +8326,15 @@ export default function App({
             | "self_compact_sliding_window"
             | undefined;
 
+          // SDK/server compaction API currently supports only {all, sliding_window}.
+          // Treat self_compact_* as aliases for now.
+          const apiModeArg: "all" | "sliding_window" | undefined =
+            modeArg === "self_compact_all"
+              ? "all"
+              : modeArg === "self_compact_sliding_window"
+                ? "sliding_window"
+                : modeArg;
+
           // Validate mode if provided
           if (modeArg && !validModes.includes(modeArg)) {
             const cmd = commandRunner.start(
@@ -8367,7 +8376,10 @@ export default function App({
             const compactParams = modeArg
               ? {
                   compaction_settings: {
-                    mode: modeArg,
+                    // SDK now requires a summarizer model handle whenever compaction_settings is provided.
+                    // Default to the current session model handle when available.
+                    model: currentModelHandle ?? "openai/gpt-4o-mini",
+                    mode: apiModeArg,
                   },
                 }
               : undefined;
@@ -13357,7 +13369,7 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                   currentReasoningEffort={currentReasoningEffort}
                   currentSystemPromptId={currentSystemPromptId}
                   currentToolset={currentToolset}
-                  messageQueue={messageQueue}
+                  messageQueue={queueDisplay}
                   onEnterQueueEditMode={handleEnterQueueEditMode}
                   onEscapeCancel={
                     profileConfirmPending
