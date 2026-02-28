@@ -22,6 +22,7 @@ export type StreamRequestContext = {
   resolvedConversationId: string;
   agentId: string | null;
   requestStartedAtMs: number;
+  userMessage?: string;
 };
 const streamRequestContexts = new WeakMap<object, StreamRequestContext>();
 
@@ -80,6 +81,32 @@ export async function sendMessageStream(
   const resolvedConversationId =
     conversationId === "default" ? opts.agentId : conversationId;
 
+  const userMessage = (() => {
+    // Best-effort: capture the last user message content for external observability.
+    // This should never affect correctness.
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m: any = messages[i];
+      if (!m || typeof m !== "object") continue;
+      const role = typeof m.role === "string" ? m.role : null;
+      const messageType = typeof m.message_type === "string" ? m.message_type : null;
+      const isUser = role === "user" || messageType === "user_message";
+      if (!isUser) continue;
+
+      const c: any = (m as any).content;
+      if (typeof c === "string") return c;
+      if (Array.isArray(c)) {
+        return c
+          .map((p: any) => {
+            if (typeof p === "string") return p;
+            if (p && typeof p === "object" && typeof p.text === "string") return p.text;
+            return "";
+          })
+          .join("");
+      }
+    }
+    return undefined;
+  })();
+
   if (!resolvedConversationId) {
     throw new Error(
       "agentId is required in opts when using default conversation",
@@ -114,6 +141,7 @@ export async function sendMessageStream(
     resolvedConversationId,
     agentId: opts.agentId ?? null,
     requestStartedAtMs,
+    userMessage,
   });
 
   return stream;
