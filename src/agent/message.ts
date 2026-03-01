@@ -85,20 +85,26 @@ export async function sendMessageStream(
     // Best-effort: capture the last user message content for external observability.
     // This should never affect correctness.
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const m: any = messages[i];
+      const m = messages[i];
       if (!m || typeof m !== "object") continue;
-      const role = typeof m.role === "string" ? m.role : null;
-      const messageType = typeof m.message_type === "string" ? m.message_type : null;
+      const rec = m as Record<string, unknown>;
+      const role = typeof rec.role === "string" ? rec.role : null;
+      const messageType =
+        typeof rec.message_type === "string" ? rec.message_type : null;
       const isUser = role === "user" || messageType === "user_message";
       if (!isUser) continue;
 
-      const c: any = (m as any).content;
-      if (typeof c === "string") return c;
-      if (Array.isArray(c)) {
-        return c
-          .map((p: any) => {
+      const content = rec.content;
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        return content
+          .map((p) => {
             if (typeof p === "string") return p;
-            if (p && typeof p === "object" && typeof p.text === "string") return p.text;
+            if (p && typeof p === "object") {
+              const part = p as Record<string, unknown>;
+              const text = part.text;
+              if (typeof text === "string") return text;
+            }
             return "";
           })
           .join("");

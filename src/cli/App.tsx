@@ -1875,7 +1875,9 @@ export default function App({
   const [staticItems, setStaticItems] = useState<StaticItem[]>([]);
 
   // Show in-transcript notification when auto-update applied a significant new version
-  const [footerUpdateText, setFooterUpdateText] = useState<string | null>(null);
+  const [_footerUpdateText, setFooterUpdateText] = useState<string | null>(
+    null,
+  );
   useEffect(() => {
     if (!updateNotification) return;
     setStaticItems((prev) => {

@@ -220,7 +220,8 @@ export async function drainStream(
   let hasLoggedTTFT = false;
 
   const streamProcessor = new StreamProcessor();
-  const bridgeSessionId = String(process.env.LETTA_CODE_BRIDGE_SESSION_ID || "").trim() || undefined;
+  const bridgeSessionId =
+    String(process.env.LETTA_CODE_BRIDGE_SESSION_ID || "").trim() || undefined;
   let bridgeNotified = false;
 
   let stopReason: StopReasonType | null = null;
@@ -308,7 +309,11 @@ export async function drainStream(
         streamProcessor.processChunk(chunk);
 
       // Best-effort: notify external bridge as soon as we learn the Letta run id.
-      if (!bridgeNotified && streamProcessor.lastRunId && streamRequestContext?.agentId) {
+      if (
+        !bridgeNotified &&
+        streamProcessor.lastRunId &&
+        streamRequestContext?.agentId
+      ) {
         bridgeNotified = true;
         notifyBridgeTurnBestEffort({
           conversationId: streamRequestContext.resolvedConversationId,
