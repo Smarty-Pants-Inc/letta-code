@@ -24,6 +24,13 @@ function truthy(name: string): boolean {
 }
 
 export function notifyBridgeTurnBestEffort(notification: BridgeTurnNotification): void {
+  // By default we only notify for the top-level agent. Task/subagent processes can
+  // generate many runs and will spam Zulip + trip rate limits if they inherit the
+  // same bridge webhook env.
+  const isSubagent = String(process.env.LETTA_CODE_AGENT_ROLE || "").toLowerCase() === "subagent";
+  const allowSubagents = truthy("LETTA_CODE_BRIDGE_NOTIFY_SUBAGENTS");
+  if (isSubagent && !allowSubagents) return;
+
   const url = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
   if (!url) return;
 
