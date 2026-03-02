@@ -81,6 +81,30 @@ export function buildConversationMessagesCreateRequestBody(
     );
   }
 
+  const enableThinkingEnv = String(
+    process.env.LETTA_ENABLE_THINKING || process.env.ENABLE_THINKING || "",
+  )
+    .trim()
+    .toLowerCase();
+  const enableThinking =
+    enableThinkingEnv === "1" ||
+    enableThinkingEnv === "true" ||
+    enableThinkingEnv === "yes";
+
+  const includeReturnMessageTypes = enableThinking
+    ? ([
+        "assistant_message",
+        "reasoning_message",
+        "hidden_reasoning_message",
+        "tool_call_message",
+        "tool_return_message",
+        "approval_request_message",
+        "approval_response_message",
+        "summary_message",
+        "event_message",
+      ] as string[])
+    : undefined;
+
   return {
     messages: normalizeOutgoingApprovalMessages(
       messages,
@@ -93,6 +117,10 @@ export function buildConversationMessagesCreateRequestBody(
     client_skills: clientSkills,
     client_tools: clientTools,
     include_compaction_messages: true,
+    ...(includeReturnMessageTypes
+      ? { include_return_message_types: includeReturnMessageTypes }
+      : {}),
+    ...(enableThinking ? { enable_thinking: "true" } : {}),
     ...(isDefaultConversation ? { agent_id: opts.agentId } : {}),
   };
 }
@@ -182,8 +210,9 @@ export async function sendMessageStream(
   if (isDebugEnabled()) {
     debugLog(
       "agent-message",
-      "sendMessageStream: conversationId=%s, agentId=%s",
+      "sendMessageStream: conversationId=%s, resolvedConversationId=%s, agentId=%s",
       conversationId,
+      resolvedConversationId,
       opts.agentId ?? "(none)",
     );
 
