@@ -1115,6 +1115,17 @@ export default function App({
     conversationIdRef.current = conversationId;
   }, [conversationId]);
 
+  // Best-effort: auto-link this conversation to a Zulip thread (if configured).
+  useEffect(() => {
+    void import("../bridge/autoBridgeLink")
+      .then(({ autoBridgeLinkIfEnabled }) =>
+        autoBridgeLinkIfEnabled({ agentId, conversationId }),
+      )
+      .catch(() => {
+        // Best-effort only
+      });
+  }, [agentId, conversationId]);
+
   const zulipSyncManagerRef = useRef<ReturnType<
     typeof createLocalZulipSyncManager
   > | null>(null);
