@@ -156,11 +156,18 @@ type LinkResolveResponse =
       conversationId: string;
       threadId: string;
       sessionId: string;
+      realmId: string;
+      realmUrl: string;
       streamId: number;
       topic: string;
     }
   | { ok: true; linked: false; conversationId: string }
   | { ok: false; error: string };
+
+export type ResolvedZulipLink = Extract<
+  LinkResolveResponse,
+  { ok: true; linked: true }
+>;
 
 async function resolveLink(params: {
   baseUrl: string;
@@ -202,6 +209,14 @@ async function resolveLink(params: {
 
 const seenKeys = new Set<string>();
 const inFlight = new Map<string, Promise<void>>();
+
+const linksByConversation = new Map<string, ResolvedZulipLink>();
+
+export function getResolvedZulipLink(
+  conversationId: string,
+): ResolvedZulipLink | null {
+  return linksByConversation.get(conversationId) ?? null;
+}
 
 export async function autoBridgeLinkIfEnabled(params: {
   agentId: string;
@@ -251,6 +266,13 @@ export async function autoBridgeLinkIfEnabled(params: {
       });
 
       if (out.ok && out.linked) {
+        // Cache full link info for other call sites (e.g., post prompt as user).
+        try {
+          linksByConversation.set(conversationId, out);
+        } catch {
+          // Best-effort only.
+        }
+
         const sessionId = String(out.sessionId || "").trim();
         if (sessionId) {
           process.env.LETTA_CODE_BRIDGE_SESSION_ID = sessionId;

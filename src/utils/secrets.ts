@@ -18,6 +18,10 @@ let SERVICE_NAME = "letta-code";
 const API_KEY_NAME = "letta-api-key";
 const REFRESH_TOKEN_NAME = "letta-refresh-token";
 
+// Zulip user credentials (for posting prompts as the human user).
+const ZULIP_USER_EMAIL_NAME = "zulip-user-email";
+const ZULIP_USER_API_KEY_NAME = "zulip-user-api-key";
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -115,6 +119,63 @@ export async function getApiKey(): Promise<string | null> {
 /**
  * Store refresh token in system secrets
  */
+
+/**
+ * Store Zulip user email in system secrets.
+ */
+export async function setZulipUserEmail(email: string): Promise<void> {
+  if (!secretsAvailable) {
+    throw new Error("Secrets API unavailable");
+  }
+
+  await setSecretValue(ZULIP_USER_EMAIL_NAME, email);
+}
+
+/**
+ * Retrieve Zulip user email from system secrets.
+ */
+export async function getZulipUserEmail(): Promise<string | null> {
+  if (secretsAvailable) {
+    try {
+      return await secrets.get({
+        service: SERVICE_NAME,
+        name: ZULIP_USER_EMAIL_NAME,
+      });
+    } catch {
+      // Best-effort only.
+    }
+  }
+  return null;
+}
+
+/**
+ * Store Zulip user API key in system secrets.
+ */
+export async function setZulipUserApiKey(apiKey: string): Promise<void> {
+  if (!secretsAvailable) {
+    throw new Error("Secrets API unavailable");
+  }
+
+  await setSecretValue(ZULIP_USER_API_KEY_NAME, apiKey);
+}
+
+/**
+ * Retrieve Zulip user API key from system secrets.
+ */
+export async function getZulipUserApiKey(): Promise<string | null> {
+  if (secretsAvailable) {
+    try {
+      return await secrets.get({
+        service: SERVICE_NAME,
+        name: ZULIP_USER_API_KEY_NAME,
+      });
+    } catch {
+      // Best-effort only.
+    }
+  }
+  return null;
+}
+
 export async function setRefreshToken(refreshToken: string): Promise<void> {
   if (!secretsAvailable) {
     // When secrets unavailable, let the settings manager handle fallback

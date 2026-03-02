@@ -10,6 +10,8 @@ export type BridgeTurnNotification = {
   agentId: string;
   lettaRunId: string;
   userMessage?: string;
+  // If true, the bridge should not mirror userMessage as a bot message.
+  suppressUserMessageMirror?: boolean;
   sessionId?: string;
   source?: string;
 };
@@ -23,6 +25,83 @@ function truthy(name: string): boolean {
   return v === "1" || v === "true" || v === "yes" || v === "y";
 }
 
+function sanitizeExternalPrompt(content: string): string {
+  // Avoid leaking system-reminder blocks into Zulip as the human.
+  return String(content || "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .trim();
+}
+
+async function getZulipUserCredentials(): Promise<
+  { email: string; apiKey: string } | null
+> {
+  const envEmail = env("LETTA_CODE_ZULIP_USER_EMAIL") || env("ZULIP_USER_EMAIL");
+  const email = envEmail.trim();
+  if (!email) return null;
+
+  const envKey = env("LETTA_CODE_ZULIP_USER_API_KEY") || env("ZULIP_USER_API_KEY");
+  if (envKey.trim()) {
+    return { email, apiKey: envKey.trim() };
+  }
+
+  try {
+    const { getZulipUserApiKey } = await import("../utils/secrets");
+    const apiKey = (await getZulipUserApiKey()) || "";
+    if (apiKey.trim()) {
+      return { email, apiKey: apiKey.trim() };
+    }
+  } catch {
+    // Best-effort only.
+  }
+
+  return null;
+}
+
+async function postUserPromptToZulip(args: {
+  realmUrl: string;
+  streamId: number;
+  topic: string;
+  content: string;
+  email: string;
+  apiKey: string;
+}): Promise<boolean> {
+  const base = String(args.realmUrl || "").replace(/\/+$/, "");
+  if (!base) return false;
+  const url = `${base}/api/v1/messages`;
+
+  const params = new URLSearchParams({
+    type: "stream",
+    to: String(Math.trunc(args.streamId)),
+    topic: String(args.topic || ""),
+    content: String(args.content || ""),
+  });
+
+  const auth = Buffer.from(`${args.email}:${args.apiKey}`, "utf-8").toString(
+    "base64",
+  );
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const postedUserPromptRunIds = new Set<string>();
+
 export function notifyBridgeTurnBestEffort(
   notification: BridgeTurnNotification,
 ): void {
@@ -35,12 +114,58 @@ export function notifyBridgeTurnBestEffort(
   const allowSubagents = truthy("LETTA_CODE_BRIDGE_NOTIFY_SUBAGENTS");
   if (isSubagent && !allowSubagents) return;
 
-  const sendOnce = (url: string): void => {
+  const shouldPostAsUser = truthy("LETTA_CODE_ZULIP_POST_AS_USER");
+
+
+  const maybePostUserPromptAsUser = async (): Promise<boolean> => {
+    if (!shouldPostAsUser) return false;
+
+    const userMessage = notification.userMessage;
+    if (!userMessage) return false;
+
+    const runId = notification.lettaRunId;
+    if (postedUserPromptRunIds.has(runId)) return false;
+    postedUserPromptRunIds.add(runId);
+
+    try {
+      const { autoBridgeLinkIfEnabled, getResolvedZulipLink } = await import(
+        "./autoBridgeLink"
+      );
+      await autoBridgeLinkIfEnabled({
+        agentId: notification.agentId,
+        conversationId: notification.conversationId,
+      });
+
+      const link = getResolvedZulipLink(notification.conversationId);
+      if (!link) return false;
+
+      const creds = await getZulipUserCredentials();
+      if (!creds) return false;
+
+      const cleaned = sanitizeExternalPrompt(userMessage);
+      if (!cleaned) return false;
+
+      return await postUserPromptToZulip({
+        realmUrl: link.realmUrl,
+        streamId: link.streamId,
+        topic: link.topic,
+        content: cleaned,
+        email: creds.email,
+        apiKey: creds.apiKey,
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  const sendOnce = (url: string, suppressUserMessageMirror: boolean): void => {
     const secret = env("LETTA_CODE_BRIDGE_WEBHOOK_SECRET");
     const allowInsecure = truthy("LETTA_CODE_ALLOW_INSECURE_BRIDGE_WEBHOOK");
     if (!secret && !allowInsecure) {
       return;
     }
+
+
 
     const sessionId =
       notification.sessionId ||
@@ -53,6 +178,10 @@ export function notifyBridgeTurnBestEffort(
       lettaRunId: notification.lettaRunId,
       source: notification.source || "smarty",
     };
+
+    if (suppressUserMessageMirror) {
+      body.suppressUserMessageMirror = true;
+    }
 
     // Only include userMessage when auth is configured.
     if (secret && notification.userMessage) {
@@ -90,7 +219,10 @@ export function notifyBridgeTurnBestEffort(
 
   const url = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
   if (url) {
-    sendOnce(url);
+    void (async () => {
+      const suppress = await maybePostUserPromptAsUser();
+      sendOnce(url, suppress);
+    })();
     return;
   }
 
@@ -111,7 +243,10 @@ export function notifyBridgeTurnBestEffort(
     .finally(() => {
       const nextUrl = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
       if (nextUrl) {
-        sendOnce(nextUrl);
+        void (async () => {
+          const suppress = await maybePostUserPromptAsUser();
+          sendOnce(nextUrl, suppress);
+        })();
       }
     });
 }
