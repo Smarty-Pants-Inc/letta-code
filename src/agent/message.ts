@@ -91,6 +91,10 @@ export function buildConversationMessagesCreateRequestBody(
     enableThinkingEnv === "true" ||
     enableThinkingEnv === "yes";
 
+  const overrideModel = String(
+    process.env.LETTA_OVERRIDE_MODEL || process.env.OVERRIDE_MODEL || "",
+  ).trim();
+
   const includeReturnMessageTypes = enableThinking
     ? ([
         "assistant_message",
@@ -120,6 +124,7 @@ export function buildConversationMessagesCreateRequestBody(
     ...(includeReturnMessageTypes
       ? { include_return_message_types: includeReturnMessageTypes }
       : {}),
+    ...(overrideModel ? { override_model: overrideModel } : {}),
     ...(enableThinking ? { enable_thinking: "true" } : {}),
     ...(isDefaultConversation ? { agent_id: opts.agentId } : {}),
   };
