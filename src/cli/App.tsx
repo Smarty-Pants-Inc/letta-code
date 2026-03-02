@@ -103,6 +103,10 @@ import { updateProjectSettings } from "../settings";
 import { settingsManager } from "../settings-manager";
 import { telemetry } from "../telemetry";
 import {
+  shouldAutoApproveEnterPlanMode,
+  shouldAutoApproveExitPlanMode,
+} from "../tools/interactivePolicy";
+import {
   analyzeToolApproval,
   checkToolPermission,
   executeTool,
@@ -5050,6 +5054,163 @@ export default function App({
                 missingNameReason:
                   "Tool call incomplete - missing name or arguments",
               });
+
+            // Optional: auto-approve plan mode transitions.
+            //
+            // We only auto-approve when the tool is the *only* pending approval for
+            // this stop, to avoid surprising interactions when multiple tools are
+            // requested in parallel.
+            if (
+              approvalsToProcess.length === 1 &&
+              needsUserInput.length === 1
+            ) {
+              const only = needsUserInput[0];
+              if (
+                only &&
+                only.approval.toolName === "EnterPlanMode" &&
+                shouldAutoApproveEnterPlanMode()
+              ) {
+                const approvalItem = only.approval;
+                const planFilePath = generatePlanFilePath();
+                const applyPatchRelativePath = relative(
+                  process.cwd(),
+                  planFilePath,
+                ).replace(/\\/g, "/");
+
+                // Toggle plan mode on and store plan file path
+                permissionMode.setMode("plan");
+                permissionMode.setPlanFilePath(planFilePath);
+                setUiPermissionMode("plan");
+
+                const toolReturn = `Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.
+
+In plan mode, you should:
+1. Thoroughly explore the codebase to understand existing patterns
+2. Identify similar features and architectural approaches
+3. Consider multiple approaches and their trade-offs
+4. Use AskUserQuestion if you need to clarify the approach
+5. Design a concrete implementation strategy
+6. When ready, use ExitPlanMode to present the plan to the user for approval
+
+Remember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase.
+
+Plan file path: ${planFilePath}
+If using apply_patch, use this exact relative patch path: ${applyPatchRelativePath}`;
+
+                const precomputedResult: ToolExecutionResult = {
+                  toolReturn,
+                  status: "success",
+                };
+
+                onChunk(buffersRef.current, {
+                  message_type: "tool_return_message",
+                  id: "dummy",
+                  date: new Date().toISOString(),
+                  tool_call_id: approvalItem.toolCallId,
+                  tool_return: toolReturn,
+                  status: "success",
+                  stdout: null,
+                  stderr: null,
+                });
+
+                setThinkingMessage(getRandomThinkingVerb());
+                refreshDerived();
+
+                const results: ApprovalResult[] = [
+                  {
+                    type: "tool",
+                    tool_call_id: approvalItem.toolCallId,
+                    tool_return: precomputedResult.toolReturn,
+                    status: precomputedResult.status,
+                    stdout: precomputedResult.stdout,
+                    stderr: precomputedResult.stderr,
+                  },
+                ];
+                toolResultsInFlightRef.current = true;
+                await processConversation(
+                  [{ type: "approval", approvals: results }],
+                  { allowReentry: true },
+                );
+                toolResultsInFlightRef.current = false;
+                return;
+              }
+
+              if (
+                only &&
+                only.approval.toolName === "ExitPlanMode" &&
+                shouldAutoApproveExitPlanMode()
+              ) {
+                const approvalItem = only.approval;
+
+                // Capture plan file path BEFORE exiting plan mode (for post-approval rendering)
+                const planFilePath = permissionMode.getPlanFilePath();
+                lastPlanFilePathRef.current = planFilePath;
+
+                // Exit plan mode: restore prior permission mode unless acceptEdits was requested.
+                const restoreMode = resolvePlanExitMode(
+                  false,
+                  permissionMode.getModeBeforePlan(),
+                );
+                permissionMode.setMode(restoreMode);
+                setUiPermissionMode(restoreMode);
+
+                try {
+                  const parsedArgs = safeJsonParseOr<Record<string, unknown>>(
+                    approvalItem.toolArgs,
+                    {},
+                  );
+                  const toolResult = await executeTool(
+                    "ExitPlanMode",
+                    parsedArgs,
+                  );
+
+                  onChunk(buffersRef.current, {
+                    message_type: "tool_return_message",
+                    id: "dummy",
+                    date: new Date().toISOString(),
+                    tool_call_id: approvalItem.toolCallId,
+                    tool_return: getDisplayableToolReturn(
+                      toolResult.toolReturn,
+                    ),
+                    status: toolResult.status,
+                    stdout: toolResult.stdout,
+                    stderr: toolResult.stderr,
+                  });
+
+                  setThinkingMessage(getRandomThinkingVerb());
+                  refreshDerived();
+
+                  const results: ApprovalResult[] = [
+                    {
+                      type: "tool",
+                      tool_call_id: approvalItem.toolCallId,
+                      tool_return: toolResult.toolReturn,
+                      status: toolResult.status,
+                      stdout: toolResult.stdout,
+                      stderr: toolResult.stderr,
+                    },
+                  ];
+                  toolResultsInFlightRef.current = true;
+                  await processConversation(
+                    [{ type: "approval", approvals: results }],
+                    { allowReentry: true },
+                  );
+                  toolResultsInFlightRef.current = false;
+                  return;
+                } catch (e) {
+                  const errorDetails = formatErrorDetails(
+                    e,
+                    agentIdRef.current,
+                  );
+                  appendError(errorDetails, {
+                    ...extractErrorMeta(e),
+                    context: "approval_send",
+                  });
+                  setStreaming(false);
+                  return;
+                }
+              }
+            }
 
             // Precompute diffs for file edit tools before execution (both auto-allowed and needs-user-input)
             // This is needed for inline approval UI to show diffs, and for post-approval rendering
