@@ -35,52 +35,84 @@ export function notifyBridgeTurnBestEffort(
   const allowSubagents = truthy("LETTA_CODE_BRIDGE_NOTIFY_SUBAGENTS");
   if (isSubagent && !allowSubagents) return;
 
-  const url = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
-  if (!url) return;
+  const sendOnce = (url: string): void => {
+    const secret = env("LETTA_CODE_BRIDGE_WEBHOOK_SECRET");
+    const allowInsecure = truthy("LETTA_CODE_ALLOW_INSECURE_BRIDGE_WEBHOOK");
+    if (!secret && !allowInsecure) {
+      return;
+    }
 
-  const secret = env("LETTA_CODE_BRIDGE_WEBHOOK_SECRET");
-  const allowInsecure = truthy("LETTA_CODE_ALLOW_INSECURE_BRIDGE_WEBHOOK");
-  if (!secret && !allowInsecure) {
+    const sessionId =
+      notification.sessionId ||
+      String(process.env.LETTA_CODE_BRIDGE_SESSION_ID || "").trim() ||
+      undefined;
+
+    const body: Record<string, unknown> = {
+      conversationId: notification.conversationId,
+      agentId: notification.agentId,
+      lettaRunId: notification.lettaRunId,
+      source: notification.source || "smarty",
+    };
+
+    // Only include userMessage when auth is configured.
+    if (secret && notification.userMessage) {
+      body.userMessage = notification.userMessage;
+    }
+    if (sessionId) {
+      body.sessionId = sessionId;
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (secret) {
+      headers.Authorization = `Bearer ${secret}`;
+    }
+
+    // Fire-and-forget: keep it fast and never block the TUI.
+    const ac = new AbortController();
+    const timeout = setTimeout(() => ac.abort(), 1500);
+
+    void fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    })
+      .catch(() => {
+        // Best-effort only.
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        ac.abort();
+      });
+  };
+
+  const url = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
+  if (url) {
+    sendOnce(url);
     return;
   }
 
-  const body: Record<string, unknown> = {
-    conversationId: notification.conversationId,
-    agentId: notification.agentId,
-    lettaRunId: notification.lettaRunId,
-    source: notification.source || "smarty",
-  };
+  // If auto-linking is enabled, attempt to establish the tunnel + resolve the
+  // Zulip sessionId before dropping the notification.
+  if (!truthy("LETTA_CODE_BRIDGE_AUTO")) return;
 
-  // Only include userMessage when auth is configured.
-  if (secret && notification.userMessage) {
-    body.userMessage = notification.userMessage;
-  }
-  if (notification.sessionId) {
-    body.sessionId = notification.sessionId;
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (secret) {
-    headers.Authorization = `Bearer ${secret}`;
-  }
-
-  // Fire-and-forget: keep it fast and never block the TUI.
-  const ac = new AbortController();
-  const timeout = setTimeout(() => ac.abort(), 1500);
-
-  void fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: ac.signal,
-  })
+  void import("./autoBridgeLink")
+    .then(({ autoBridgeLinkIfEnabled }) =>
+      autoBridgeLinkIfEnabled({
+        agentId: notification.agentId,
+        conversationId: notification.conversationId,
+      }),
+    )
     .catch(() => {
       // Best-effort only.
     })
     .finally(() => {
-      clearTimeout(timeout);
-      ac.abort();
+      const nextUrl = env("LETTA_CODE_BRIDGE_WEBHOOK_URL");
+      if (nextUrl) {
+        sendOnce(nextUrl);
+      }
     });
 }
+

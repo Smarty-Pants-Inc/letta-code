@@ -966,6 +966,7 @@ async function main(): Promise<void> {
 
   function LoadingApp({
     continueSession,
+    continueSessionOptional,
     forceNew,
     initBlocks,
     baseTools,
@@ -978,6 +979,7 @@ async function main(): Promise<void> {
     isRegistryImport,
   }: {
     continueSession: boolean;
+    continueSessionOptional?: boolean;
     forceNew: boolean;
     initBlocks?: string[];
     baseTools?: string[];
@@ -1817,7 +1819,7 @@ async function main(): Promise<void> {
 
         // Debug: log resume flag status
         if (process.env.DEBUG) {
-          console.log(`[DEBUG] shouldContinue=${shouldContinue}`);
+          console.log(`[DEBUG] continueSession=${continueSession}`);
           console.log(`[DEBUG] shouldResume=${shouldResume}`);
           console.log(
             `[DEBUG] specifiedConversationId=${specifiedConversationId}`,
@@ -1851,7 +1853,7 @@ async function main(): Promise<void> {
             }
             throw error;
           }
-        } else if (shouldContinue) {
+        } else if (continueSession) {
           // Try to load the last session for this agent
           const lastSession =
             settingsManager.getLocalLastSession(process.cwd()) ??
@@ -1896,14 +1898,26 @@ async function main(): Promise<void> {
           }
 
           if (!resumedSuccessfully) {
-            // No valid session to resume - error with helpful message
-            console.error(
-              `Attempting to resume conversation ${lastSession?.conversationId ?? "(unknown)"}, but conversation was not found.`,
-            );
-            console.error(
-              "Resume the default conversation with 'letta', view recent conversations with 'letta --resume', or start a new conversation with 'letta --new'.",
-            );
-            process.exit(1);
+            if (continueSessionOptional) {
+              // Bridge auto-linking wants a non-default conversation; but if we
+              // have no resumable session, fall back to the default conversation
+              // instead of exiting.
+              conversationIdToUse = "default";
+              setLoadingState("checking");
+              const data = await getResumeData(client, agent, "default");
+              setResumeData(data);
+              setResumedExistingConversation(data.messageHistory.length > 0);
+              resumedSuccessfully = true;
+            } else {
+              // No valid session to resume - error with helpful message
+              console.error(
+                `Attempting to resume conversation ${lastSession?.conversationId ?? "(unknown)"}, but conversation was not found.`,
+              );
+              console.error(
+                "Resume the default conversation with 'letta', view recent conversations with 'letta --resume', or start a new conversation with 'letta --new'.",
+              );
+              process.exit(1);
+            }
           }
         } else if (selectedConversationId) {
           // User selected a specific conversation from the --resume selector
@@ -2192,9 +2206,29 @@ async function main(): Promise<void> {
   }
 
   markMilestone("REACT_RENDER_START");
+
+
+  const bridgeAutoEnabled = (() => {
+    const raw = String(process.env.LETTA_CODE_BRIDGE_AUTO || "").toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "y";
+  })();
+
+  const bridgeAutoContinue =
+    bridgeAutoEnabled &&
+    !shouldContinue &&
+    !shouldResume &&
+    !forceNew &&
+    !forceNewConversation &&
+    !specifiedConversationId &&
+    !specifiedAgentId &&
+    !specifiedAgentName &&
+    !fromAfFile;
+
+  const effectiveContinueSession = shouldContinue || bridgeAutoContinue;
   render(
     React.createElement(LoadingApp, {
-      continueSession: shouldContinue,
+      continueSession: effectiveContinueSession,
+      continueSessionOptional: bridgeAutoContinue,
       forceNew: forceNew,
       initBlocks: initBlocks,
       baseTools: baseTools,
