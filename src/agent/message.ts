@@ -129,6 +129,20 @@ export async function sendMessageStream(
     enableThinkingEnv === "true" ||
     enableThinkingEnv === "yes";
 
+  const includeReturnMessageTypes = enableThinking
+    ? ([
+        "assistant_message",
+        "reasoning_message",
+        "hidden_reasoning_message",
+        "tool_call_message",
+        "tool_return_message",
+        "approval_request_message",
+        "approval_response_message",
+        "summary_message",
+        "event_message",
+      ] as string[])
+    : undefined;
+
   if (process.env.DEBUG) {
     console.log(
       `[DEBUG] sendMessageStream: conversationId=${conversationId}, resolved=${resolvedConversationId}`,
@@ -142,6 +156,7 @@ export async function sendMessageStream(
     background: opts.background ?? true,
     client_tools: clientTools,
     include_compaction_messages: true,
+    include_return_message_types: includeReturnMessageTypes,
     ...(enableThinking ? { enable_thinking: "true" } : {}),
   };
 
