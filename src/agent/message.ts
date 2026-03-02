@@ -119,22 +119,35 @@ export async function sendMessageStream(
     );
   }
 
+  const enableThinkingEnv = String(
+    process.env.LETTA_ENABLE_THINKING || process.env.ENABLE_THINKING || "",
+  )
+    .trim()
+    .toLowerCase();
+  const enableThinking =
+    enableThinkingEnv === "1" ||
+    enableThinkingEnv === "true" ||
+    enableThinkingEnv === "yes";
+
   if (process.env.DEBUG) {
     console.log(
       `[DEBUG] sendMessageStream: conversationId=${conversationId}, resolved=${resolvedConversationId}`,
     );
   }
 
+  const body: any = {
+    messages: messages,
+    streaming: true,
+    stream_tokens: opts.streamTokens ?? true,
+    background: opts.background ?? true,
+    client_tools: clientTools,
+    include_compaction_messages: true,
+    ...(enableThinking ? { enable_thinking: true } : {}),
+  };
+
   const stream = await client.conversations.messages.create(
     resolvedConversationId,
-    {
-      messages: messages,
-      streaming: true,
-      stream_tokens: opts.streamTokens ?? true,
-      background: opts.background ?? true,
-      client_tools: clientTools,
-      include_compaction_messages: true,
-    },
+    body,
     requestOptions,
   );
 
