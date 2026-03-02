@@ -129,9 +129,9 @@ export async function sendMessageStream(
     enableThinkingEnv === "true" ||
     enableThinkingEnv === "yes";
 
-
-  const overrideModel = String(process.env.LETTA_OVERRIDE_MODEL || process.env.OVERRIDE_MODEL || "")
-    .trim();
+  const overrideModel = String(
+    process.env.LETTA_OVERRIDE_MODEL || process.env.OVERRIDE_MODEL || "",
+  ).trim();
   const includeReturnMessageTypes = enableThinking
     ? ([
         "assistant_message",
@@ -152,8 +152,8 @@ export async function sendMessageStream(
     );
   }
 
-  const body: any = {
-    messages: messages,
+  const body: Record<string, unknown> = {
+    messages,
     streaming: true,
     stream_tokens: opts.streamTokens ?? true,
     background: opts.background ?? true,

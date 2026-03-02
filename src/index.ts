@@ -2011,12 +2011,11 @@ async function main(): Promise<void> {
           });
         }
 
-
         // Best-effort: if this conversation is linked to a Zulip thread, set up
         // local webhook mirroring (auto SSH tunnel + sessionId resolution).
         try {
           const { autoBridgeLinkIfEnabled } = await import(
-            "./bridge/autoBridgeLink",
+            "./bridge/autoBridgeLink"
           );
           void autoBridgeLinkIfEnabled({
             agentId: agent.id,
