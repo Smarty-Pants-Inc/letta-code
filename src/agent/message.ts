@@ -142,7 +142,7 @@ export async function sendMessageStream(
     background: opts.background ?? true,
     client_tools: clientTools,
     include_compaction_messages: true,
-    ...(enableThinking ? { enable_thinking: true } : {}),
+    ...(enableThinking ? { enable_thinking: "true" } : {}),
   };
 
   const stream = await client.conversations.messages.create(
