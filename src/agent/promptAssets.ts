@@ -74,6 +74,24 @@ export const SYSTEM_PROMPTS: SystemPromptOption[] = [
     isFeatured: true,
   },
   {
+    id: "letta-claude",
+    label: "Letta Claude",
+    description: "Compatibility alias for the canonical Letta Code prompt",
+    content: lettaPrompt,
+  },
+  {
+    id: "letta-codex",
+    label: "Letta Codex",
+    description: "Compatibility alias for the canonical Letta Code prompt",
+    content: lettaPrompt,
+  },
+  {
+    id: "letta-gemini",
+    label: "Letta Gemini",
+    description: "Compatibility alias for the canonical Letta Code prompt",
+    content: lettaPrompt,
+  },
+  {
     id: "source-claude",
     label: "Claude Code",
     description: "Source-faithful Claude Code prompt (for benchmarking)",
