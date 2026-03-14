@@ -3330,6 +3330,13 @@ async function runBidirectionalMode(
       continue;
     }
 
+    // Control responses are normally consumed by local request waiters (for example,
+    // requestPermission). If one arrives on the top-level loop anyway, do not surface
+    // it as an end-user error; it belongs to an in-flight runtime control flow.
+    if (message.type === "control_response") {
+      continue;
+    }
+
     // Handle user messages
     if (message.type === "user" && message.message?.content !== undefined) {
       const queuedInputs: BidirectionalQueuedInput[] = [
