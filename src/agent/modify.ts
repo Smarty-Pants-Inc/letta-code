@@ -282,11 +282,46 @@ export async function updateConversationLLMConfig(
  * @returns The compiled system prompt returned by the API
  */
 export async function recompileAgentSystemPrompt(
-  conversationId: string,
-  agentId: string,
-  dryRun?: boolean,
+  conversationIdOrAgentId: string,
+  agentIdOrOptions:
+    | string
+    | {
+        updateTimestamp?: boolean;
+        dryRun?: boolean;
+      },
+  dryRunOrClient?:
+    | boolean
+    | {
+        agents?: {
+          recompile?: (
+            agentId: string,
+            params: {
+              dry_run?: boolean;
+              update_timestamp?: boolean;
+            },
+          ) => Promise<string>;
+        };
+        conversations?: {
+          recompile: (
+            conversationId: string,
+            params: {
+              dry_run?: boolean;
+              agent_id?: string;
+            },
+          ) => Promise<string>;
+        };
+      },
   clientOverride?: {
-    conversations: {
+    agents?: {
+      recompile?: (
+        agentId: string,
+        params: {
+          dry_run?: boolean;
+          update_timestamp?: boolean;
+        },
+      ) => Promise<string>;
+    };
+    conversations?: {
       recompile: (
         conversationId: string,
         params: {
@@ -297,21 +332,64 @@ export async function recompileAgentSystemPrompt(
     };
   },
 ): Promise<string> {
-  const client = (clientOverride ?? (await getClient())) as Exclude<
-    typeof clientOverride,
-    undefined
-  >;
+  const isAgentScopedForm =
+    typeof agentIdOrOptions === "object" && agentIdOrOptions !== null;
+
+  const client = ((isAgentScopedForm ? dryRunOrClient : clientOverride) ??
+    (await getClient())) as {
+    agents?: {
+      recompile?: (
+        agentId: string,
+        params: {
+          dry_run?: boolean;
+          update_timestamp?: boolean;
+        },
+      ) => Promise<string>;
+    };
+    conversations?: {
+      recompile: (
+        conversationId: string,
+        params: {
+          dry_run?: boolean;
+          agent_id?: string;
+        },
+      ) => Promise<string>;
+    };
+  };
+
+  const agentId = isAgentScopedForm
+    ? conversationIdOrAgentId
+    : agentIdOrOptions;
 
   if (!agentId) {
     throw new Error("recompileAgentSystemPrompt requires agentId");
   }
 
+  if (isAgentScopedForm && client.agents?.recompile) {
+    const options = agentIdOrOptions;
+    return client.agents.recompile(agentId, {
+      dry_run: options.dryRun,
+      update_timestamp: options.updateTimestamp,
+    });
+  }
+
+  if (client.agents?.recompile) {
+    return client.agents.recompile(agentId, {
+      dry_run: typeof dryRunOrClient === "boolean" ? dryRunOrClient : undefined,
+      update_timestamp: undefined,
+    });
+  }
+
+  if (!client.conversations?.recompile) {
+    throw new Error("recompileAgentSystemPrompt requires recompile support");
+  }
+
   const params = {
-    dry_run: dryRun,
+    dry_run: typeof dryRunOrClient === "boolean" ? dryRunOrClient : undefined,
     agent_id: agentId,
   };
 
-  return client.conversations.recompile(conversationId, params);
+  return client.conversations.recompile(conversationIdOrAgentId, params);
 }
 
 export interface SystemPromptUpdateResult {
