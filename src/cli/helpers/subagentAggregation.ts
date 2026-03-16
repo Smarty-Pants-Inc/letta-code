@@ -142,6 +142,7 @@ export function createSubagentGroupItem(
         agentURL: subagent.agentURL,
         error: subagent.error,
         model: subagent.model,
+        reasoningEffort: subagent.reasoningEffort,
         isBackground: subagent.isBackground,
       });
     }

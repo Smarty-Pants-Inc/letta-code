@@ -43,6 +43,7 @@ export interface SubagentModelDisplay {
   label: string;
   isByokProvider: boolean;
   isOpenAICodexProvider: boolean;
+  reasoningEffortLabel?: string;
 }
 
 /**
@@ -51,6 +52,7 @@ export interface SubagentModelDisplay {
  */
 export function getSubagentModelDisplay(
   model: string | undefined,
+  reasoningEffort?: string | null,
 ): SubagentModelDisplay | null {
   if (!model) return null;
 
@@ -64,9 +66,24 @@ export function getSubagentModelDisplay(
   const label =
     getModelShortName(normalized) ?? normalized.split("/").pop() ?? normalized;
 
+  const effort = typeof reasoningEffort === "string" ? reasoningEffort : null;
+
+  // Match the footer style: show the full reasoning tier (no dash, no abbreviations).
+  // Normalize legacy/alias values (e.g. "med" -> "medium"). Hide unknown values.
+  const normalizedEffort =
+    effort === "med" ? "medium" : effort === "min" ? "minimal" : effort;
+  const allowedEfforts = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+  const effortLabel =
+    normalizedEffort === "none" || !normalizedEffort
+      ? undefined
+      : allowedEfforts.has(normalizedEffort)
+        ? normalizedEffort
+        : undefined;
+
   return {
     label,
     isByokProvider,
     isOpenAICodexProvider,
+    reasoningEffortLabel: effortLabel,
   };
 }

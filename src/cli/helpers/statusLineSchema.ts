@@ -14,6 +14,7 @@ export const STATUSLINE_NATIVE_FIELDS: StatusLineFieldSpec[] = [
   { path: "model.id" },
   { path: "model.display_name" },
   { path: "agent.id" },
+  { path: "reasoning_effort" },
   { path: "agent.name" },
   { path: "step_count" },
   { path: "turn_count" },

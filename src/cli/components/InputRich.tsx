@@ -415,16 +415,10 @@ const InputFooter = memo(function InputFooter({
       <Box
         flexDirection="column"
         alignItems="flex-end"
-        width={
-          statusLineRight && !hideFooterContent
-            ? undefined
-            : effectiveRightWidth
-        }
+        width={statusLineRight ? undefined : effectiveRightWidth}
         flexShrink={0}
       >
-        {hideFooterContent ? (
-          <Text>{" ".repeat(rightColumnWidth)}</Text>
-        ) : statusLineRight ? (
+        {statusLineRight ? (
           statusLineRight.split("\n").map((line, i) => (
             <Text key={`${i}-${line}`} wrap="truncate-end">
               {parseOsc8Line(line, `r${i}`)}
@@ -1122,16 +1116,12 @@ export function Input({
     if (!interactionEnabled) return;
 
     // Tab (no shift): cycle reasoning effort tiers for the current model (when idle).
-    // Only trigger when autocomplete is NOT active.
-    if (
-      key.tab &&
-      !key.shift &&
-      !isAutocompleteActive &&
-      !streaming &&
-      onCycleReasoningEffort
-    ) {
-      onCycleReasoningEffort();
-      return;
+    // Allow this even with non-empty input so users can adjust reasoning mid-prompt.
+    if (key.tab && !key.shift && !isAutocompleteActive && !streaming) {
+      if (onCycleReasoningEffort) {
+        onCycleReasoningEffort();
+        return;
+      }
     }
 
     // Debug logging for shift+tab detection

@@ -396,7 +396,8 @@ function deriveReasoningEffort(
   if (modelSettings && "provider_type" in modelSettings) {
     // OpenAI/OpenRouter: reasoning.reasoning_effort
     if (
-      modelSettings.provider_type === "openai" &&
+      (modelSettings.provider_type === "openai" ||
+        modelSettings.provider_type === "chatgpt_oauth") &&
       "reasoning" in modelSettings &&
       modelSettings.reasoning
     ) {
@@ -2653,7 +2654,8 @@ export default function App({
   const statusLine = useConfigurableStatusLine({
     modelId: llmConfigRef.current?.model ?? null,
     modelDisplayName: currentModelDisplay,
-    reasoningEffort: currentReasoningEffort,
+    reasoningEffort:
+      llmConfigRef.current?.reasoning_effort ?? currentReasoningEffort,
     systemPromptId: currentSystemPromptId,
     toolset: currentToolset,
     currentDirectory: process.cwd(),
@@ -2674,7 +2676,7 @@ export default function App({
     reflectionStepCount: reflectionSettings.stepCount,
     memfsEnabled,
     memfsDirectory,
-    permissionMode: uiPermissionMode,
+    permissionMode: permissionMode.getMode(),
     networkPhase,
     terminalWidth: chromeColumns,
     backgroundAgents: getActiveBackgroundAgents().map((a) => ({
@@ -2694,7 +2696,7 @@ export default function App({
     previousStreamingForStatusLineRef.current = streaming;
   }, [streaming, triggerStatusLineRefresh]);
 
-  const statusLineRefreshIdentity = `${conversationId}|${currentModelDisplay ?? ""}|${currentModelProvider ?? ""}|${agentName ?? ""}|${columns}|${contextWindowSize ?? ""}|${currentReasoningEffort ?? ""}|${currentSystemPromptId ?? ""}|${currentToolset ?? ""}`;
+  const statusLineRefreshIdentity = `${conversationId}|${currentModelDisplay ?? ""}|${currentModelProvider ?? ""}|${agentName ?? ""}|${columns}|${contextWindowSize ?? ""}|${currentSystemPromptId ?? ""}|${currentToolset ?? ""}|${llmConfigRef.current?.reasoning_effort ?? ""}`;
 
   // Trigger status line when key session identity/display state changes.
   useEffect(() => {

@@ -35,7 +35,7 @@ export interface StatusLineInputs {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   contextWindowSize?: number;
-  usedContextTokens?: number;
+  usedContextTokens?: number | null;
   stepCount?: number;
   turnCount?: number;
   reflectionMode?: "off" | "step-count" | "compaction-event" | null;

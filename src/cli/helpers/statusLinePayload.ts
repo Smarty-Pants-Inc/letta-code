@@ -17,7 +17,7 @@ export interface StatusLinePayloadBuildInput {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   contextWindowSize?: number;
-  usedContextTokens?: number;
+  usedContextTokens?: number | null;
   stepCount?: number;
   turnCount?: number;
   reflectionMode?: "off" | "step-count" | "compaction-event" | null;
@@ -140,10 +140,11 @@ export function buildStatusLinePayload(
     0,
     Math.floor(input.contextWindowSize ?? 0),
   );
-  const usedContextTokens = Math.max(
-    0,
-    Math.floor(input.usedContextTokens ?? 0),
-  );
+  const usedContextTokensRaw = input.usedContextTokens;
+  const usedContextTokens =
+    usedContextTokensRaw === null || usedContextTokensRaw === undefined
+      ? null
+      : Math.max(0, Math.floor(usedContextTokensRaw));
   const stepCount = Math.max(0, Math.floor(input.stepCount ?? 0));
   const turnCount = Math.max(0, Math.floor(input.turnCount ?? 0));
   const reflectionStepCount = Math.max(
@@ -152,7 +153,7 @@ export function buildStatusLinePayload(
   );
 
   const percentages =
-    contextWindowSize > 0
+    contextWindowSize > 0 && usedContextTokens !== null
       ? calculateContextPercentages(usedContextTokens, contextWindowSize)
       : null;
 
@@ -191,7 +192,7 @@ export function buildStatusLinePayload(
       remaining_percentage: percentages?.remaining ?? null,
       current_usage: null,
     },
-    exceeds_200k_tokens: usedContextTokens > 200_000,
+    exceeds_200k_tokens: (usedContextTokens ?? 0) > 200_000,
     vim: null,
     agent: {
       id: input.agentId ?? null,
