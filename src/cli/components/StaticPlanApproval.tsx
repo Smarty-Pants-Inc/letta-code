@@ -1,6 +1,11 @@
 import { Box, useInput } from "ink";
 import { memo, useCallback, useState } from "react";
+import { permissionMode } from "../../permissions/mode";
 import { generateAndOpenPlanViewer } from "../../web/generate-plan-viewer";
+import {
+  getPlanApprovalChoices,
+  type PlanApprovalChoice,
+} from "../helpers/planApproval";
 import { useProgressIndicator } from "../hooks/useProgressIndicator";
 import { useTerminalWidth } from "../hooks/useTerminalWidth";
 import { useTextInputCursor } from "../hooks/useTextInputCursor";
@@ -8,11 +13,11 @@ import { colors } from "./colors";
 import { Text } from "./Text";
 
 type Props = {
-  onApprove: () => void;
+  onApproveRestore: () => void;
+  onApproveManual: () => void;
   onApproveAndAcceptEdits: () => void;
   onKeepPlanning: (reason: string) => void;
   onCancel: () => void; // For CTRL-C to queue denial (like other approval screens)
-  showAcceptEditsOption?: boolean;
   isFocused?: boolean;
   planContent?: string;
   planFilePath?: string;
@@ -32,11 +37,11 @@ type Props = {
  */
 export const StaticPlanApproval = memo(
   ({
-    onApprove,
+    onApproveRestore,
+    onApproveManual,
     onApproveAndAcceptEdits,
     onKeepPlanning,
     onCancel,
-    showAcceptEditsOption = true,
     isFocused = true,
     planContent,
     planFilePath,
@@ -52,6 +57,13 @@ export const StaticPlanApproval = memo(
     } = useTextInputCursor();
     const columns = useTerminalWidth();
     useProgressIndicator();
+
+    const modeBeforePlan = permissionMode.getModeBeforePlan() ?? "default";
+    const options: PlanApprovalChoice[] =
+      getPlanApprovalChoices(modeBeforePlan);
+    const customOptionIndex = options.findIndex((o) => o.decision === "custom");
+    const maxOptionIndex = Math.max(0, options.length - 1);
+    const isOnCustomOption = selectedOption === customOptionIndex;
 
     const openInBrowser = useCallback(() => {
       if (!planContent || !planFilePath) return;
@@ -71,10 +83,6 @@ export const StaticPlanApproval = memo(
         });
     }, [planContent, planFilePath, agentName]);
 
-    const customOptionIndex = showAcceptEditsOption ? 2 : 1;
-    const maxOptionIndex = customOptionIndex;
-    const effectiveSelectedOption = Math.min(selectedOption, maxOptionIndex);
-    const isOnCustomOption = effectiveSelectedOption === customOptionIndex;
     const customOptionPlaceholder =
       "Type here to tell Letta Code what to change";
 
@@ -130,11 +138,11 @@ export const StaticPlanApproval = memo(
 
         // When on regular options
         if (key.return) {
-          if (showAcceptEditsOption && effectiveSelectedOption === 0) {
-            onApproveAndAcceptEdits();
-          } else {
-            onApprove();
-          }
+          const choice = options[selectedOption];
+          if (!choice) return;
+          if (choice.decision === "restore") onApproveRestore();
+          if (choice.decision === "manual") onApproveManual();
+          if (choice.decision === "autoAccept") onApproveAndAcceptEdits();
           return;
         }
         if (key.escape) {
@@ -143,16 +151,17 @@ export const StaticPlanApproval = memo(
         }
 
         // Number keys for quick selection (only for fixed options, not custom text input)
-        if (input === "1") {
-          if (showAcceptEditsOption) {
-            onApproveAndAcceptEdits();
-          } else {
-            onApprove();
+        if (/^[1-9]$/.test(input)) {
+          const idx = Number(input) - 1;
+          const choice = options[idx];
+          if (!choice) return;
+          if (choice.decision === "custom") {
+            setSelectedOption(idx);
+            return;
           }
-          return;
-        }
-        if (showAcceptEditsOption && input === "2") {
-          onApprove();
+          if (choice.decision === "restore") onApproveRestore();
+          if (choice.decision === "manual") onApproveManual();
+          if (choice.decision === "autoAccept") onApproveAndAcceptEdits();
           return;
         }
       },
@@ -176,88 +185,41 @@ export const StaticPlanApproval = memo(
 
         {/* Options */}
         <Box marginTop={1} flexDirection="column">
-          {/* Option 1 */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={
-                  effectiveSelectedOption === 0
-                    ? colors.approval.header
-                    : undefined
-                }
-              >
-                {effectiveSelectedOption === 0 ? "❯" : " "} 1.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              <Text
-                wrap="wrap"
-                color={
-                  effectiveSelectedOption === 0
-                    ? colors.approval.header
-                    : undefined
-                }
-              >
-                {showAcceptEditsOption
-                  ? "Yes, and auto-accept edits"
-                  : "Yes, proceed (bypassPermissions / yolo mode)"}
-              </Text>
-            </Box>
-          </Box>
+          {options.map((opt, idx) => {
+            const isSelected = selectedOption === idx;
+            const color = isSelected ? colors.approval.header : undefined;
+            const isCustom = opt.decision === "custom";
 
-          {/* Option 2: Yes, and manually approve edits */}
-          {showAcceptEditsOption && (
-            <Box flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text
-                  color={
-                    effectiveSelectedOption === 1
-                      ? colors.approval.header
-                      : undefined
-                  }
-                >
-                  {effectiveSelectedOption === 1 ? "❯" : " "} 2.
-                </Text>
+            return (
+              <Box key={`${opt.decision}-${idx}`} flexDirection="row">
+                <Box width={5} flexShrink={0}>
+                  <Text color={color}>
+                    {isSelected ? "❯" : " "} {idx + 1}.
+                  </Text>
+                </Box>
+                <Box flexGrow={1} width={Math.max(0, columns - 5)}>
+                  {isCustom ? (
+                    customReason ? (
+                      <Text wrap="wrap">
+                        {customReason.slice(0, cursorPos)}
+                        {isSelected && "█"}
+                        {customReason.slice(cursorPos)}
+                      </Text>
+                    ) : (
+                      <Text wrap="wrap" dimColor>
+                        {customOptionPlaceholder}
+                        {isSelected && "█"}
+                      </Text>
+                    )
+                  ) : (
+                    <Text wrap="wrap" color={color}>
+                      {opt.label}
+                    </Text>
+                  )}
+                </Box>
               </Box>
-              <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-                <Text
-                  wrap="wrap"
-                  color={
-                    effectiveSelectedOption === 1
-                      ? colors.approval.header
-                      : undefined
-                  }
-                >
-                  Yes, and manually approve edits
-                </Text>
-              </Box>
-            </Box>
-          )}
-
-          {/* Option 3: Custom input */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={isOnCustomOption ? colors.approval.header : undefined}
-              >
-                {isOnCustomOption ? "❯" : " "} {customOptionIndex + 1}.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              {customReason ? (
-                <Text wrap="wrap">
-                  {customReason.slice(0, cursorPos)}
-                  {isOnCustomOption && "█"}
-                  {customReason.slice(cursorPos)}
-                </Text>
-              ) : (
-                <Text wrap="wrap" dimColor>
-                  {customOptionPlaceholder}
-                  {isOnCustomOption && "█"}
-                </Text>
-              )}
-            </Box>
-          </Box>
+            );
+          })}
         </Box>
 
         {/* Hint */}

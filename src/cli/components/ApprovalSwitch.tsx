@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { permissionMode } from "../../permissions/mode";
 import type { AdvancedDiffSuccess } from "../helpers/diff";
+import type { PlanApprovalDecision } from "../helpers/planApproval";
 import type { ApprovalRequest } from "../helpers/stream";
 import {
   isFileEditTool,
@@ -72,7 +73,7 @@ type Props = {
   defaultScope?: "project" | "session";
 
   // Special handlers for ExitPlanMode
-  onPlanApprove?: (acceptEdits: boolean) => void;
+  onPlanApprove?: (decision: PlanApprovalDecision) => void;
   onPlanKeepPlanning?: (reason: string) => void;
 
   // Special handlers for AskUserQuestion
@@ -236,8 +237,9 @@ export const ApprovalSwitch = memo(
         permissionMode.getModeBeforePlan() !== "bypassPermissions";
       return (
         <StaticPlanApproval
-          onApprove={() => onPlanApprove(false)}
-          onApproveAndAcceptEdits={() => onPlanApprove(true)}
+          onApproveRestore={() => onPlanApprove("restore")}
+          onApproveManual={() => onPlanApprove("manual")}
+          onApproveAndAcceptEdits={() => onPlanApprove("autoAccept")}
           onKeepPlanning={onPlanKeepPlanning}
           onCancel={onCancel ?? (() => {})}
           showAcceptEditsOption={showAcceptEditsOption}
