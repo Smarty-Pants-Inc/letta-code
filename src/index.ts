@@ -946,6 +946,8 @@ async function main(): Promise<void> {
   const App = AppModule.default;
 
   function LoadingApp({
+    continueSession,
+    continueSessionOptional,
     forceNew,
     initBlocks,
     baseTools,
@@ -957,6 +959,8 @@ async function main(): Promise<void> {
     fromAfFile,
     isRegistryImport,
   }: {
+    continueSession: boolean;
+    continueSessionOptional?: boolean;
     forceNew: boolean;
     initBlocks?: string[];
     baseTools?: string[];
@@ -1732,6 +1736,7 @@ async function main(): Promise<void> {
 
         // Debug: log resume flag status
         if (isDebugEnabled()) {
+          debugLog("startup", "continueSession=%o", continueSession);
           debugLog("startup", "shouldResume=%o", shouldResume);
           debugLog(
             "startup",
@@ -1766,6 +1771,72 @@ async function main(): Promise<void> {
               process.exit(1);
             }
             throw error;
+          }
+        } else if (continueSession) {
+          // Try to load the last session for this agent
+          const lastSession =
+            settingsManager.getLocalLastSession(process.cwd()) ??
+            settingsManager.getGlobalLastSession();
+
+          if (isDebugEnabled()) {
+            debugLog("startup", "lastSession=%o", lastSession);
+            debugLog("startup", "agent.id=%s", agent.id);
+          }
+
+          let resumedSuccessfully = false;
+          if (lastSession && lastSession.agentId === agent.id) {
+            // Try to resume the exact last conversation
+            // If it no longer exists, fall back to creating new
+            try {
+              // Load message history and pending approvals from the conversation
+              setLoadingState("checking");
+              const data = await getResumeData(
+                client,
+                agent,
+                lastSession.conversationId,
+              );
+              // Only set state after validation succeeds
+              conversationIdToUse = lastSession.conversationId;
+              setResumedExistingConversation(true);
+              setResumeData(data);
+              resumedSuccessfully = true;
+            } catch (error) {
+              // Only treat 404/422 as "not found", rethrow other errors
+              if (
+                error instanceof APIError &&
+                (error.status === 404 || error.status === 422)
+              ) {
+                // Conversation no longer exists, will create new below
+                console.warn(
+                  `Previous conversation ${lastSession.conversationId} not found, creating new`,
+                );
+              } else {
+                throw error;
+              }
+            }
+          }
+
+          if (!resumedSuccessfully) {
+            if (continueSessionOptional) {
+              // Bridge auto-linking wants a non-default conversation; but if we
+              // have no resumable session, fall back to the default conversation
+              // instead of exiting.
+              conversationIdToUse = "default";
+              setLoadingState("checking");
+              const data = await getResumeData(client, agent, "default");
+              setResumeData(data);
+              setResumedExistingConversation(data.messageHistory.length > 0);
+              resumedSuccessfully = true;
+            } else {
+              // No valid session to resume - error with helpful message
+              console.error(
+                `Attempting to resume conversation ${lastSession?.conversationId ?? "(unknown)"}, but conversation was not found.`,
+              );
+              console.error(
+                "Resume the default conversation with 'letta', view recent conversations with 'letta --resume', or start a new conversation with 'letta --new'.",
+              );
+              process.exit(1);
+            }
           }
         } else if (selectedConversationId) {
           // Conversation selected from --resume selector or auto-restored from local project settings
@@ -1879,6 +1950,19 @@ async function main(): Promise<void> {
           });
         }
 
+        // Best-effort: if this conversation is linked to a Zulip thread, set up
+        // local webhook mirroring (auto SSH tunnel + sessionId resolution).
+        try {
+          const { autoBridgeLinkIfEnabled } = await import(
+            "./bridge/autoBridgeLink"
+          );
+          void autoBridgeLinkIfEnabled({
+            agentId: agent.id,
+            conversationId: conversationIdToUse,
+          });
+        } catch {
+          // Best-effort only
+        }
         setAgentId(agent.id);
         setAgentState(agent);
         setConversationId(conversationIdToUse);
@@ -2026,8 +2110,28 @@ async function main(): Promise<void> {
   }
 
   markMilestone("REACT_RENDER_START");
+
+  const bridgeAutoEnabled = (() => {
+    const raw = String(process.env.LETTA_CODE_BRIDGE_AUTO || "").toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "y";
+  })();
+
+  const bridgeAutoContinue =
+    bridgeAutoEnabled &&
+    !shouldContinue &&
+    !shouldResume &&
+    !forceNew &&
+    !forceNewConversation &&
+    !specifiedConversationId &&
+    !specifiedAgentId &&
+    !specifiedAgentName &&
+    !fromAfFile;
+
+  const effectiveContinueSession = shouldContinue || bridgeAutoContinue;
   render(
     React.createElement(LoadingApp, {
+      continueSession: effectiveContinueSession,
+      continueSessionOptional: bridgeAutoContinue,
       forceNew: forceNew,
       initBlocks: initBlocks,
       baseTools: baseTools,

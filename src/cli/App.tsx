@@ -214,7 +214,7 @@ import {
 } from "./helpers/accumulator";
 import { classifyApprovals } from "./helpers/approvalClassification";
 import { buildChatUrl } from "./helpers/appUrls";
-import { backfillBuffers } from "./helpers/backfill";
+import { appendMessagesToBuffers, backfillBuffers } from "./helpers/backfill";
 import { chunkLog } from "./helpers/chunkLog";
 import {
   type ContextWindowOverview,
@@ -337,6 +337,7 @@ import { useConfigurableStatusLine } from "./hooks/useConfigurableStatusLine";
 import { useSuspend } from "./hooks/useSuspend/useSuspend.ts";
 import { useSyncedState } from "./hooks/useSyncedState";
 import { useTerminalRows, useTerminalWidth } from "./hooks/useTerminalWidth";
+import { createLocalZulipSyncManager } from "./zulipSync";
 
 // Used only for terminal resize, not for dialog dismissal (see PR for details)
 const CLEAR_SCREEN_AND_HOME = "\u001B[2J\u001B[H";
@@ -983,6 +984,62 @@ export default function App({
     prefetchAvailableModelHandles();
   }, []);
 
+  const getFollowServerKey = useCallback((): string => {
+    const settings = settingsManager.getSettings();
+    const baseUrl =
+      process.env.LETTA_BASE_URL ||
+      settings.env?.LETTA_BASE_URL ||
+      "https://api.letta.com";
+    return baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  }, []);
+
+  const getFollowSessionKey = useCallback(
+    (agentId: string, conversationId: string): string =>
+      `${agentId}:${conversationId}`,
+    [],
+  );
+
+  const loadPersistedFollowCursor = useCallback(
+    (agentId: string, conversationId: string): string | null => {
+      try {
+        const local = settingsManager.getLocalProjectSettings();
+        const serverKey = getFollowServerKey();
+        const sessionKey = getFollowSessionKey(agentId, conversationId);
+        return local.followCursorsByServer?.[serverKey]?.[sessionKey] ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [getFollowServerKey, getFollowSessionKey],
+  );
+
+  const persistFollowCursor = useCallback(
+    (agentId: string, conversationId: string, cursor: string) => {
+      if (!cursor) return;
+      if (lastPersistedFollowCursorRef.current === cursor) return;
+      lastPersistedFollowCursorRef.current = cursor;
+
+      try {
+        const local = settingsManager.getLocalProjectSettings();
+        const serverKey = getFollowServerKey();
+        const sessionKey = getFollowSessionKey(agentId, conversationId);
+
+        const nextForServer = {
+          ...(local.followCursorsByServer?.[serverKey] || {}),
+          [sessionKey]: cursor,
+        };
+        const followCursorsByServer = {
+          ...(local.followCursorsByServer || {}),
+          [serverKey]: nextForServer,
+        };
+        settingsManager.updateLocalProjectSettings({ followCursorsByServer });
+      } catch {
+        // Ignore persistence failures - follow mode is best-effort.
+      }
+    },
+    [getFollowServerKey, getFollowSessionKey],
+  );
+
   // Track current agent (can change when swapping)
   const [agentId, setAgentId] = useState(initialAgentId);
   const [agentState, setAgentState] = useState(initialAgentState);
@@ -1024,8 +1081,86 @@ export default function App({
   // approval continuations (requires_approval -> approval result round-trip).
   const pendingTranscriptStartLineIndexRef = useRef<number | null>(null);
 
+  // Best-effort: auto-link this conversation to a Zulip thread (if configured).
+  useEffect(() => {
+    void import("../bridge/autoBridgeLink")
+      .then(({ autoBridgeLinkIfEnabled }) =>
+        autoBridgeLinkIfEnabled({ agentId, conversationId }),
+      )
+      .catch(() => {
+        // Best-effort only
+      });
+  }, [agentId, conversationId]);
+
   // Track the most recent run ID from streaming (for statusline display)
   const lastRunIdRef = useRef<string | null>(null);
+
+  const zulipSyncManagerRef = useRef<ReturnType<
+    typeof createLocalZulipSyncManager
+  > | null>(null);
+  const [zulipSyncActive, setZulipSyncActive] = useState(false);
+  useEffect(() => {
+    zulipSyncManagerRef.current = createLocalZulipSyncManager({
+      workingDirectory: projectDirectory,
+      agentId,
+      conversationId,
+    });
+    setZulipSyncActive(zulipSyncManagerRef.current !== null);
+  }, [projectDirectory, agentId, conversationId]);
+
+  // Optional: follow conversation for out-of-band updates (other writers).
+  // With local Zulip sync active, default follow polling on to surface external updates.
+  // An explicit LETTA_CODE_FOLLOW_POLL_MS always wins (including 0 to disable).
+  const hasExplicitFollowPollMs = Object.hasOwn(
+    process.env,
+    "LETTA_CODE_FOLLOW_POLL_MS",
+  );
+  const followPollMs = hasExplicitFollowPollMs
+    ? Number(process.env.LETTA_CODE_FOLLOW_POLL_MS)
+    : zulipSyncActive
+      ? 2000
+      : 0;
+  const followEnabled = followPollMs > 0;
+  const followCursorRef = useRef<string | null>(null);
+  const followInFlightRef = useRef(false);
+  const lastPersistedFollowCursorRef = useRef<string | null>(null);
+  const recentLocalUserInputsRef = useRef<
+    Array<{ text: string; atMs: number }>
+  >([]);
+
+  const recordLocalUserInput = useCallback((text: string) => {
+    const now = Date.now();
+    const normalized = text.trimEnd();
+    if (!normalized.trim()) return;
+
+    // Keep a small, time-bounded window for deduping our own user messages.
+    // Keep this tight to avoid false-positives when another writer sends the same
+    // short message ("ok", "yes", etc.).
+    const keepMs = 15 * 1000;
+    const items = recentLocalUserInputsRef.current.filter(
+      (x) => now - x.atMs < keepMs,
+    );
+    items.push({ text: normalized, atMs: now });
+    // Cap size to avoid unbounded growth.
+    recentLocalUserInputsRef.current = items.slice(-25);
+  }, []);
+
+  // Reset cursor when switching agent/conversation.
+  // If follow is enabled, seed from persisted cursor so reconnect replays everything since last seen.
+  useEffect(() => {
+    lastPersistedFollowCursorRef.current = null;
+    if (!followEnabled) {
+      followCursorRef.current = null;
+      return;
+    }
+    if (!agentId || agentId === "loading") {
+      followCursorRef.current = null;
+      return;
+    }
+    const stored = loadPersistedFollowCursor(agentId, conversationId);
+    followCursorRef.current = stored;
+    lastPersistedFollowCursorRef.current = stored;
+  }, [agentId, conversationId, followEnabled, loadPersistedFollowCursor]);
 
   const resumeKey = useSuspend();
 
@@ -1764,7 +1899,9 @@ export default function App({
   const [staticItems, setStaticItems] = useState<StaticItem[]>([]);
 
   // Show in-transcript notification when auto-update applied a significant new version
-  const [footerUpdateText, setFooterUpdateText] = useState<string | null>(null);
+  const [_footerUpdateText, setFooterUpdateText] = useState<string | null>(
+    null,
+  );
   useEffect(() => {
     if (!updateNotification) return;
     setStaticItems((prev) => {
@@ -3159,6 +3296,223 @@ export default function App({
     releaseNotes,
   ]);
 
+  // Follow mode (out-of-band updates): poll for new messages from the current
+  // conversation when idle and merge them into the transcript.
+  //
+  // This is intentionally off by default. Enable with:
+  //   LETTA_CODE_FOLLOW_POLL_MS=2000
+  //
+  // We poll list endpoints (not /stream) because Letta's /stream endpoints are
+  // run-scoped resumption helpers, not a true conversation follower stream.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: polling uses refs intentionally; dependency suggestions are noisy
+  useEffect(() => {
+    if (!followEnabled) return;
+    if (loadingState !== "ready") return;
+    if (!agentId || agentId === "loading") return;
+
+    let stopped = false;
+
+    const unwrapMessages = (resp: unknown): Message[] => {
+      if (!resp) return [];
+      if (Array.isArray(resp)) return resp as Message[];
+      const r = resp as Record<string, unknown>;
+      const items = r.items;
+      if (Array.isArray(items)) return items as Message[];
+      const getPaginatedItems = r.getPaginatedItems;
+      if (typeof getPaginatedItems === "function") {
+        const fn = getPaginatedItems as unknown as () => Iterable<Message>;
+        return [...fn()];
+      }
+      return [];
+    };
+
+    const pollOnce = async () => {
+      if (stopped) return;
+      if (followInFlightRef.current) return;
+      // Avoid fighting the active streaming UI.
+      if (streamingRef.current) return;
+      // Avoid overlapping follow polling with a user-initiated send. Some backends
+      // enforce conversation-level request serialization and will return 409s if we
+      // race a send with any other request.
+      if (processingConversationRef.current > 0) return;
+
+      const curAgentId = agentIdRef.current;
+      const curConversationId = conversationIdRef.current;
+      if (!curAgentId || curAgentId === "loading") return;
+
+      followInFlightRef.current = true;
+      try {
+        const client = await getClient();
+
+        let cursor = followCursorRef.current;
+
+        // Use asc order + after cursor so we only fetch new messages.
+        // When reconnecting, we may need to drain multiple pages so we truly replay
+        // everything since the last seen message.
+        const PAGE_LIMIT = 100;
+
+        const fetchPage = async (
+          params: Record<string, unknown>,
+        ): Promise<Message[]> => {
+          let resp: unknown;
+          if (curConversationId === "default") {
+            resp = await client.agents.messages.list(curAgentId, {
+              ...params,
+              conversation_id: "default",
+            });
+          } else {
+            resp = await client.conversations.messages.list(
+              curConversationId,
+              params,
+            );
+          }
+          return unwrapMessages(resp);
+        };
+
+        const msgs: Message[] = [];
+
+        try {
+          if (!cursor) {
+            // Seed cursor only. We avoid merging a full tail page here because it can
+            // append older messages out-of-order if the transcript already has recent
+            // backfilled history.
+            const latest = await fetchPage({ limit: 1, order: "desc" });
+            const latestId = latest[0]?.id;
+            if (latestId) {
+              followCursorRef.current = latestId;
+              persistFollowCursor(curAgentId, curConversationId, latestId);
+            }
+            return;
+          } else {
+            let after = cursor;
+            for (let i = 0; i < 20; i++) {
+              const batch = await fetchPage({
+                limit: PAGE_LIMIT,
+                order: "asc",
+                after,
+              });
+              if (batch.length === 0) break;
+              msgs.push(...batch);
+              const last = batch[batch.length - 1]?.id;
+              if (!last) break;
+              after = last;
+              if (batch.length < PAGE_LIMIT) break;
+            }
+            if (msgs.length === 0) return;
+          }
+        } catch (err) {
+          if (err instanceof APIError && err.status === 409) {
+            // Conversation is busy (another request in flight). Follow is best-effort.
+            return;
+          }
+
+          // If our persisted cursor is stale (e.g. server-side pruning), drop it and
+          // re-seed from the latest message.
+          if (
+            cursor &&
+            err instanceof APIError &&
+            (err.status === 404 || err.status === 422)
+          ) {
+            debugWarn("follow", "cursor appears stale; resetting", err);
+            followCursorRef.current = null;
+            lastPersistedFollowCursorRef.current = null;
+            cursor = null;
+
+            const latest = await fetchPage({ limit: 1, order: "desc" });
+            const latestId = latest[0]?.id;
+            if (latestId) {
+              followCursorRef.current = latestId;
+              persistFollowCursor(curAgentId, curConversationId, latestId);
+            }
+            return;
+          }
+
+          // For transient failures, keep the cursor and retry on the next poll.
+          debugWarn("follow", "poll fetch failed; keeping cursor", err);
+          return;
+        }
+
+        // Don't merge/persist if the session changed while we were polling.
+        if (
+          stopped ||
+          agentIdRef.current !== curAgentId ||
+          conversationIdRef.current !== curConversationId
+        ) {
+          return;
+        }
+
+        // Advance cursor using the last returned message id.
+        const lastId = msgs[msgs.length - 1]?.id;
+        if (lastId) {
+          followCursorRef.current = lastId;
+          persistFollowCursor(curAgentId, curConversationId, lastId);
+        }
+
+        const extractUserText = (m: Message): string => {
+          const c = (m as unknown as { content?: unknown }).content;
+          if (!c) return "";
+          if (typeof c === "string") return c;
+          if (Array.isArray(c)) {
+            return c
+              .filter(
+                (
+                  p,
+                ): p is {
+                  type?: string;
+                  text?: string;
+                } => typeof p === "object" && p !== null,
+              )
+              .filter((p) => p.type === "text")
+              .map((p) => p.text || "")
+              .join("\n\n");
+          }
+          return "";
+        };
+
+        const isLikelyLocalUserMessage = (m: Message): boolean => {
+          const now = Date.now();
+          const keepMs = 15 * 1000;
+          recentLocalUserInputsRef.current =
+            recentLocalUserInputsRef.current.filter(
+              (x) => now - x.atMs < keepMs,
+            );
+
+          const userText = extractUserText(m).trimEnd();
+          if (!userText) return false;
+
+          // Our own sent messages usually have reminders prepended server-side, but
+          // they end with the raw prompt we typed.
+          return recentLocalUserInputsRef.current.some((x) =>
+            userText.endsWith(x.text.trimEnd()),
+          );
+        };
+
+        // Include user messages from other writers, but dedupe our own prompts.
+        const mergeable = msgs.filter((m) => {
+          if (m.message_type !== "user_message") return true;
+          return !isLikelyLocalUserMessage(m);
+        });
+        if (mergeable.length === 0) return;
+
+        appendMessagesToBuffers(buffersRef.current, mergeable);
+        refreshDerived();
+      } catch (err) {
+        debugWarn("follow", "poll failed", err);
+      } finally {
+        followInFlightRef.current = false;
+      }
+    };
+
+    // Kick once on enable/switch.
+    pollOnce();
+
+    const id = setInterval(pollOnce, followPollMs);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [followEnabled, followPollMs, loadingState, agentId, conversationId]);
+
   // Fetch llmConfig when agent is ready
   useEffect(() => {
     if (loadingState === "ready" && agentId && agentId !== "loading") {
@@ -4063,6 +4417,20 @@ export default function App({
           let turnToolContextId: string | null = null;
           let preStreamResumeResult: DrainResult | null = null;
           try {
+            // If follow polling is enabled, wait for any in-flight poll to finish before
+            // sending. Some backends serialize *all* conversation requests and will return
+            // 409 if we overlap a list/poll request with a send.
+            if (followEnabled) {
+              const start = Date.now();
+              while (followInFlightRef.current) {
+                if (abortControllerRef.current?.signal.aborted) break;
+                if (userCancelledRef.current) break;
+                // Keep bounded; follow is best-effort.
+                if (Date.now() - start > Math.max(500, followPollMs)) break;
+                await new Promise((resolve) => setTimeout(resolve, 25));
+              }
+            }
+
             const nextStream = await sendMessageStream(
               conversationIdRef.current,
               currentInput,
@@ -4711,6 +5079,13 @@ export default function App({
             const precedingReasoning = buffersRef.current.lastReasoning;
             buffersRef.current.lastReasoning = undefined; // Clear after use
 
+            // Best-effort local mirror to Zulip; never block turn completion.
+            // Note: we mirror the whole turn (user + assistant) so the Zulip thread is readable.
+            void zulipSyncManagerRef.current?.mirrorTurn({
+              userText: userMessage,
+              assistantText: assistantMessage,
+            });
+
             // Run Stop hooks - if blocked/errored, continue the conversation with feedback
             const stopHookResult = await runStopHooks(
               stopReasonToHandle,
@@ -5233,6 +5608,7 @@ export default function App({
                     text: queuedUserText,
                   });
                   buffersRef.current.order.push(userId);
+                  recordLocalUserInput(queuedUserText);
                 }
 
                 if (queuedItemsToAppend && queuedItemsToAppend.length > 0) {
@@ -6103,6 +6479,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
       closeTrajectorySegment,
       resetTrajectoryBases,
       setUiPermissionMode,
+      recordLocalUserInput,
+      followEnabled,
+      followPollMs,
     ],
   );
 
@@ -8680,6 +9059,11 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                 summary: newValue,
               });
 
+              // Best-effort sync to linked Zulip topic; failures are swallowed.
+              void zulipSyncManagerRef.current?.renameConversationTopic(
+                newValue,
+              );
+
               cmd.finish(`Conversation renamed to "${newValue}"`, true);
             } catch (error) {
               const errorDetails = formatErrorDetails(error, agentId);
@@ -10223,6 +10607,7 @@ ${SYSTEM_REMINDER_CLOSE}
           text: userTextForInput,
         });
         buffersRef.current.order.push(userId);
+        recordLocalUserInput(userTextForInput);
       }
       const transcriptStartLineIndex = userTextForInput
         ? Math.max(0, toLines(buffersRef.current).length - 1)
@@ -11162,6 +11547,7 @@ ${SYSTEM_REMINDER_CLOSE}
                 text: queuedUserText,
               });
               buffersRef.current.order.push(userId);
+              recordLocalUserInput(queuedUserText);
             }
             input.push({
               type: "message",
@@ -11217,6 +11603,7 @@ ${SYSTEM_REMINDER_CLOSE}
       closeTrajectorySegment,
       openTrajectorySegment,
       commitEligibleLines,
+      recordLocalUserInput,
     ],
   );
 

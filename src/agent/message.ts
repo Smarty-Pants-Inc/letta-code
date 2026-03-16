@@ -32,6 +32,7 @@ export type StreamRequestContext = {
   resolvedConversationId: string;
   agentId: string | null;
   requestStartedAtMs: number;
+  userMessage?: string;
 };
 const streamRequestContexts = new WeakMap<object, StreamRequestContext>();
 
@@ -143,6 +144,41 @@ export async function sendMessageStream(
     clientSkills,
   );
 
+  const userMessage = (() => {
+    const extractTextPart = (part: unknown): string => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      if (
+        "text" in part &&
+        typeof (part as { text?: unknown }).text === "string"
+      ) {
+        return (part as { text: string }).text;
+      }
+      return "";
+    };
+
+    // Best-effort: capture the last user message content for external observability.
+    // This should never affect correctness.
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (!m || typeof m !== "object") continue;
+      const rec = m as Record<string, unknown>;
+
+      const role = typeof rec.role === "string" ? rec.role : null;
+      const messageType =
+        typeof rec.message_type === "string" ? rec.message_type : null;
+      const isUser = role === "user" || messageType === "user_message";
+      if (!isUser) continue;
+
+      const content = rec.content;
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        return content.map(extractTextPart).join("");
+      }
+    }
+    return undefined;
+  })();
+
   if (isDebugEnabled()) {
     debugLog(
       "agent-message",
@@ -244,6 +280,7 @@ export async function sendMessageStream(
     resolvedConversationId,
     agentId: opts.agentId ?? null,
     requestStartedAtMs,
+    userMessage,
   });
 
   return stream;

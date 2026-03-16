@@ -15,6 +15,7 @@ import {
   getStreamRequestStartTime,
   type StreamRequestContext,
 } from "../../agent/message";
+import { notifyBridgeTurnBestEffort } from "../../bridge/bridgeWebhook";
 import { telemetry } from "../../telemetry";
 import { debugLog, debugWarn } from "../../utils/debug";
 import { formatDuration, logTiming } from "../../utils/timing";
@@ -215,9 +216,13 @@ export async function drainStream(
 ): Promise<DrainResult> {
   const startTime = performance.now();
   const requestStartTime = getStreamRequestStartTime(stream) ?? startTime;
+  const streamRequestContext = getStreamRequestContext(stream);
   let hasLoggedTTFT = false;
 
   const streamProcessor = new StreamProcessor();
+  const bridgeSessionId =
+    String(process.env.LETTA_CODE_BRIDGE_SESSION_ID || "").trim() || undefined;
+  let bridgeNotified = false;
 
   let stopReason: StopReasonType | null = null;
   let hasCalledFirstMessage = false;
@@ -302,6 +307,23 @@ export async function drainStream(
 
       const { shouldOutput, errorInfo, updatedApproval } =
         streamProcessor.processChunk(chunk);
+
+      // Best-effort: notify external bridge as soon as we learn the Letta run id.
+      if (
+        !bridgeNotified &&
+        streamProcessor.lastRunId &&
+        streamRequestContext?.agentId
+      ) {
+        bridgeNotified = true;
+        notifyBridgeTurnBestEffort({
+          conversationId: streamRequestContext.resolvedConversationId,
+          agentId: streamRequestContext.agentId,
+          lettaRunId: streamProcessor.lastRunId,
+          userMessage: streamRequestContext.userMessage,
+          sessionId: bridgeSessionId,
+          source: "smarty",
+        });
+      }
 
       // Log chunk for feedback diagnostics
       try {
