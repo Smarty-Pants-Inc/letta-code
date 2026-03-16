@@ -3,7 +3,9 @@ name: history-analyzer
 description: Analyze Claude Code or Codex conversation history and directly update agent memory files with insights
 tools: Read, Write, Bash, Glob, Grep
 skills: migrating-from-codex-and-claude-code
-model: auto
+model: chatgpt-plus-pro/gpt-5.4
+updateArgs: {"reasoning_effort":"medium"}
+toolset: codex
 memoryBlocks: none
 mode: stateless
 permissionMode: bypassPermissions

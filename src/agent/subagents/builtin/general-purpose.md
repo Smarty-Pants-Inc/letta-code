@@ -1,8 +1,10 @@
 ---
 name: general-purpose
 description: Full-capability agent for research, planning, and implementation
-tools: Bash, TaskOutput, Edit, Glob, Grep, KillBash, LS, MultiEdit, Read, TodoWrite, Write
-model: auto
+tools: Shell, ShellCommand, ReadFile, ListDir, GrepFiles, ApplyPatch, UpdatePlan, Write, Edit
+model: chatgpt-plus-pro/gpt-5.4
+updateArgs: {"reasoning_effort":"high"}
+toolset: codex
 memoryBlocks: all
 mode: stateful
 ---
@@ -19,7 +21,7 @@ You DO have access to the full conversation history before you were launched.
 
 ## Instructions
 
-- You have access to all tools (Read, Write, Edit, Grep, Glob, Bash, TodoWrite, etc.)
+- You have access to all tools listed in the frontmatter for this subagent
 - Break down complex tasks into steps
 - Search the codebase to understand existing patterns
 - Follow existing code conventions and style

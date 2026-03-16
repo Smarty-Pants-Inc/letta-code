@@ -23,12 +23,12 @@ import { cliPermissions } from "../../permissions/cli";
 import { permissionMode } from "../../permissions/mode";
 import { sessionPermissions } from "../../permissions/session";
 import { settingsManager } from "../../settings-manager";
-import { resolveLettaInvocation } from "../../tools/impl/shellEnv";
 import { getErrorMessage } from "../../utils/error";
 import { getAvailableModelHandles } from "../available-models";
 import { getClient } from "../client";
 import { getCurrentAgentId } from "../context";
 import { getDefaultModelForTier, resolveModel } from "../model";
+import { resolveSystemPrompt } from "../promptAssets";
 
 import { getAllSubagentConfigs, type SubagentConfig } from ".";
 
@@ -129,6 +129,86 @@ function getProviderPrefix(handle: string): string | null {
   const slashIndex = handle.indexOf("/");
   if (slashIndex === -1) return null;
   return handle.slice(0, slashIndex);
+}
+
+export type SubagentLauncher = { command: string; args: string[] };
+
+function stripOuterQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+// Exported for tests.
+export function resolveSubagentLauncher(
+  cliArgs: string[],
+  ctx: {
+    env: NodeJS.ProcessEnv;
+    argv: string[];
+    execPath: string;
+    platform: NodeJS.Platform;
+  },
+): SubagentLauncher {
+  const envCmdRaw = ctx.env.LETTA_CODE_BIN?.trim();
+  if (envCmdRaw) {
+    const cmd = stripOuterQuotes(envCmdRaw);
+    const args: string[] = [];
+
+    const explicitArgsJson = ctx.env.LETTA_CODE_BIN_ARGS_JSON?.trim();
+    if (explicitArgsJson) {
+      try {
+        const parsed = JSON.parse(explicitArgsJson) as unknown;
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((v) => typeof v === "string")
+        ) {
+          args.push(...(parsed as string[]));
+        }
+      } catch {
+        // Ignore malformed JSON.
+      }
+    }
+
+    args.push(...cliArgs);
+    return { command: cmd, args };
+  }
+
+  const currentScript = ctx.argv[1] || "";
+  const runtime = ctx.execPath || ctx.argv[0] || "bun";
+
+  if (currentScript.endsWith(".js")) {
+    if (ctx.platform === "win32") {
+      return { command: runtime, args: [currentScript, ...cliArgs] };
+    }
+    return { command: currentScript, args: [...cliArgs] };
+  }
+
+  // When running from source (via Bun), include loader flags so markdown prompt
+  // assets are treated as text.
+  if (currentScript.includes("src/index.ts")) {
+    return {
+      command: runtime,
+      args: [
+        "--loader=.md:text",
+        "--loader=.mdx:text",
+        "--loader=.txt:text",
+        currentScript,
+        ...cliArgs,
+      ],
+    };
+  }
+
+  if (currentScript.endsWith(".ts")) {
+    return { command: runtime, args: [currentScript, ...cliArgs] };
+  }
+
+  return { command: "letta", args: [...cliArgs] };
 }
 
 function swapProviderPrefix(
@@ -261,15 +341,33 @@ function recordToolCall(
  * Handle an init event from the subagent stream
  */
 function handleInitEvent(
-  event: { agent_id?: string; conversation_id?: string },
+  event: {
+    agent_id?: string;
+    conversation_id?: string;
+    reasoning_effort?: string | null;
+  },
   state: ExecutionState,
   subagentId: string,
 ): void {
+  const next: Parameters<typeof updateSubagent>[1] = {};
+
   if (event.agent_id) {
     state.agentId = event.agent_id;
     const agentURL = buildChatUrl(event.agent_id);
-    updateSubagent(subagentId, { agentURL });
+    next.agentURL = agentURL;
   }
+
+  if (
+    typeof event.reasoning_effort === "string" ||
+    event.reasoning_effort === null
+  ) {
+    next.reasoningEffort = event.reasoning_effort;
+  }
+
+  if (Object.keys(next).length > 0) {
+    updateSubagent(subagentId, next);
+  }
+
   if (event.conversation_id) {
     state.conversationId = event.conversation_id;
   }
@@ -452,66 +550,6 @@ function parseResultFromStdout(
   }
 }
 
-interface ResolveSubagentLauncherOptions {
-  env?: NodeJS.ProcessEnv;
-  argv?: string[];
-  execPath?: string;
-  platform?: NodeJS.Platform;
-}
-
-interface SubagentLauncher {
-  command: string;
-  args: string[];
-}
-
-export function resolveSubagentLauncher(
-  cliArgs: string[],
-  options: ResolveSubagentLauncherOptions = {},
-): SubagentLauncher {
-  const env = options.env ?? process.env;
-  const argv = options.argv ?? process.argv;
-  const execPath = options.execPath ?? process.execPath;
-  const platform = options.platform ?? process.platform;
-
-  const invocation = resolveLettaInvocation(env, argv, execPath);
-  if (invocation) {
-    return {
-      command: invocation.command,
-      args: [...invocation.args, ...cliArgs],
-    };
-  }
-
-  const currentScript = argv[1] || "";
-
-  // Preserve historical subagent behavior: any .ts entrypoint uses runtime binary.
-  if (currentScript.endsWith(".ts")) {
-    return {
-      command: execPath,
-      args: [currentScript, ...cliArgs],
-    };
-  }
-
-  // Windows cannot reliably spawn bundled .js directly (EFTYPE/EINVAL).
-  if (currentScript.endsWith(".js") && platform === "win32") {
-    return {
-      command: execPath,
-      args: [currentScript, ...cliArgs],
-    };
-  }
-
-  if (currentScript.endsWith(".js")) {
-    return {
-      command: currentScript,
-      args: cliArgs,
-    };
-  }
-
-  return {
-    command: "letta",
-    args: cliArgs,
-  };
-}
-
 // ============================================================================
 // Core Functions
 // ============================================================================
@@ -519,15 +557,16 @@ export function resolveSubagentLauncher(
 /**
  * Build CLI arguments for spawning a subagent
  */
-export function buildSubagentArgs(
+export async function buildSubagentArgs(
   type: string,
   config: SubagentConfig,
   model: string | null,
   userPrompt: string,
-  existingAgentId?: string,
-  existingConversationId?: string,
-  maxTurns?: number,
-): string[] {
+  existingAgentId: string | undefined,
+  existingConversationId: string | undefined,
+  maxTurns: number | undefined,
+  hasUserModelOverride: boolean,
+): Promise<string[]> {
   const args: string[] = [];
   const isDeployingExisting = Boolean(
     existingAgentId || existingConversationId,
@@ -546,14 +585,32 @@ export function buildSubagentArgs(
     // Don't pass --system (existing agent keeps its prompt)
     // Don't pass --model (existing agent keeps its model)
   } else {
-    // Create new agent (original behavior)
-    args.push("--new-agent", "--system", type);
+    // Create new agent.
+    // Use the current canonical Letta prompt as the base for fresh subagents.
+    // Older aliases like "letta-codex" were removed from promptAssets, and
+    // hardcoding them here breaks Task spawning in source-run sessions.
+    const basePrompt = await resolveSystemPrompt("letta");
+    const combinedPrompt = `${basePrompt.trimEnd()}\n\n# Subagent: ${type}\n\n${config.systemPrompt.trim()}\n`;
+
+    args.push("--new-agent", "--system-custom", combinedPrompt);
     args.push("--tags", `type:${type}`);
     // Default all newly spawned subagents to non-memfs mode.
     // This avoids memfs startup overhead unless explicitly enabled elsewhere.
     args.push("--no-memfs");
     if (model) {
       args.push("--model", model);
+    }
+    args.push("--toolset", config.toolset || "codex");
+    if (config.updateArgs && Object.keys(config.updateArgs).length > 0) {
+      // If the caller explicitly selected a model, don't override their reasoning tier
+      // via the subagent's default updateArgs (common for Codex medium/high tiers).
+      const updateArgs = { ...config.updateArgs };
+      if (hasUserModelOverride) {
+        delete (updateArgs as { reasoning_effort?: unknown }).reasoning_effort;
+      }
+      if (Object.keys(updateArgs).length > 0) {
+        args.push("--update-args", JSON.stringify(updateArgs));
+      }
     }
   }
 
@@ -634,10 +691,11 @@ async function executeSubagent(
   baseURL: string,
   subagentId: string,
   isRetry = false,
-  signal?: AbortSignal,
-  existingAgentId?: string,
-  existingConversationId?: string,
-  maxTurns?: number,
+  signal: AbortSignal | undefined,
+  existingAgentId: string | undefined,
+  existingConversationId: string | undefined,
+  maxTurns: number | undefined,
+  hasUserModelOverride: boolean,
 ): Promise<SubagentResult> {
   // Check if already aborted before starting
   if (signal?.aborted) {
@@ -655,7 +713,7 @@ async function executeSubagent(
   }
 
   try {
-    const cliArgs = buildSubagentArgs(
+    const cliArgs = await buildSubagentArgs(
       type,
       config,
       model,
@@ -663,9 +721,15 @@ async function executeSubagent(
       existingAgentId,
       existingConversationId,
       maxTurns,
+      hasUserModelOverride,
     );
 
-    const launcher = resolveSubagentLauncher(cliArgs);
+    const launcher = resolveSubagentLauncher(cliArgs, {
+      env: process.env,
+      argv: process.argv,
+      execPath: process.execPath || process.argv[0] || "bun",
+      platform: process.platform,
+    });
     // Pass parent agent ID so subagents can access parent's context (e.g., search history)
     let parentAgentId: string | undefined;
     try {
@@ -700,6 +764,9 @@ async function executeSubagent(
     proc.once("spawn", () => {
       updateSubagent(subagentId, { status: "running" });
     });
+
+    // Capture spawn errors so we can surface them even if stderr is empty.
+    let spawnError: unknown = null;
 
     // Set up abort handler to kill the child process
     let wasAborted = false;
@@ -749,7 +816,10 @@ async function executeSubagent(
     // Wait for process to complete
     const exitCode = await new Promise<number | null>((resolve) => {
       proc.on("close", resolve);
-      proc.on("error", () => resolve(null));
+      proc.on("error", (err) => {
+        spawnError = err;
+        resolve(null);
+      });
     });
 
     // Ensure all stdout lines have been processed before completing.
@@ -794,19 +864,21 @@ async function executeSubagent(
             undefined, // existingAgentId
             undefined, // existingConversationId
             maxTurns,
+            hasUserModelOverride,
           );
         }
       }
 
-      const propagatedError = state.finalError?.trim();
-      const fallbackError = stderr || `Subagent exited with code ${exitCode}`;
+      const spawnErrorMessage = spawnError ? getErrorMessage(spawnError) : "";
+      const fallbackError =
+        stderr || spawnErrorMessage || `Subagent exited with code ${exitCode}`;
 
       return {
         agentId: state.agentId || "",
         conversationId: state.conversationId || undefined,
         report: "",
         success: false,
-        error: propagatedError || fallbackError,
+        error: state.finalError?.trim() || fallbackError,
       };
     }
 
@@ -970,6 +1042,7 @@ export async function spawnSubagent(
     existingAgentId,
     existingConversationId,
     maxTurns,
+    Boolean(userModel),
   );
 
   return result;

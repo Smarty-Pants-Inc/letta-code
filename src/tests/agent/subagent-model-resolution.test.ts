@@ -5,6 +5,7 @@ import {
   resolveSubagentLauncher,
   resolveSubagentModel,
 } from "../../agent/subagents/manager";
+import { resolveSystemPrompt } from "../../agent/promptAssets";
 
 describe("resolveSubagentLauncher", () => {
   test("explicit launcher takes precedence over .ts script autodetection", () => {
@@ -121,36 +122,64 @@ describe("resolveSubagentLauncher", () => {
 });
 
 describe("buildSubagentArgs", () => {
-  const baseConfig: SubagentConfig = {
-    name: "test-subagent",
-    description: "test",
-    systemPrompt: "test prompt",
-    allowedTools: "all",
+  const config: SubagentConfig = {
+    name: "explore",
+    description: "Read-only repo exploration",
+    systemPrompt: "Use read-only tools only and return a concise report.",
+    allowedTools: ["Read", "Glob", "Grep"],
     recommendedModel: "inherit",
+    toolset: "codex",
     skills: [],
     memoryBlocks: "none",
     mode: "stateful",
   };
 
-  test("adds --no-memfs for newly spawned subagents by default", () => {
-    const args = buildSubagentArgs("test-subagent", baseConfig, null, "hello");
+  test("fresh subagents use system-custom instead of removed system-append", async () => {
+    const args = await buildSubagentArgs(
+      "explore",
+      config,
+      "openai/gpt-5",
+      "Inspect the repository",
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
 
+    expect(args).toContain("--new-agent");
+    expect(args).toContain("--system-custom");
+    expect(args).not.toContain("--system-append");
+    expect(args).toContain("--no-memfs");
     expect(args).toContain("--init-blocks");
     expect(args).toContain("none");
-    expect(args).toContain("--no-memfs");
+
+    const systemCustomIndex = args.indexOf("--system-custom");
+    expect(systemCustomIndex).toBeGreaterThanOrEqual(0);
+
+    const combinedPrompt = args[systemCustomIndex + 1];
+    expect(combinedPrompt).toContain("# Subagent: explore");
+    expect(combinedPrompt).toContain(config.systemPrompt);
+    const canonicalBasePrompt = await resolveSystemPrompt("letta");
+    expect(combinedPrompt.startsWith(canonicalBasePrompt.trimEnd())).toBe(true);
   });
 
-  test("does not force --no-memfs when deploying an existing subagent agent", () => {
-    const args = buildSubagentArgs(
-      "test-subagent",
-      baseConfig,
+  test("deploying an existing agent keeps the non-bootstrap path", async () => {
+    const args = await buildSubagentArgs(
+      "explore",
+      config,
       null,
-      "hello",
-      "agent-existing",
+      "Inspect the repository",
+      "agent-123",
+      undefined,
+      undefined,
+      false,
     );
 
     expect(args).toContain("--agent");
-    expect(args).not.toContain("--new-agent");
+    expect(args).toContain("agent-123");
+    expect(args).toContain("--new");
+    expect(args).not.toContain("--system-custom");
+    expect(args).not.toContain("--system-append");
     expect(args).not.toContain("--no-memfs");
   });
 });

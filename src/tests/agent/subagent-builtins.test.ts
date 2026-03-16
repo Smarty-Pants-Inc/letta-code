@@ -50,6 +50,50 @@ describe("built-in subagents", () => {
     expect(configs.memory?.mode).toBe("stateful");
   });
 
+  test("uses ChatGPT Plus/Pro GPT-5.4 defaults with role-appropriate reasoning", async () => {
+    const configs = await getAllSubagentConfigs();
+
+    expect(configs.explore?.recommendedModel).toBe("chatgpt-plus-pro/gpt-5.4");
+    expect(configs.explore?.updateArgs).toEqual({ reasoning_effort: "low" });
+    expect(configs.explore?.toolset).toBe("codex");
+
+    expect(configs["general-purpose"]?.recommendedModel).toBe(
+      "chatgpt-plus-pro/gpt-5.4",
+    );
+    expect(configs["general-purpose"]?.updateArgs).toEqual({
+      reasoning_effort: "high",
+    });
+    expect(configs["general-purpose"]?.toolset).toBe("codex");
+
+    expect(configs["history-analyzer"]?.recommendedModel).toBe(
+      "chatgpt-plus-pro/gpt-5.4",
+    );
+    expect(configs["history-analyzer"]?.updateArgs).toEqual({
+      reasoning_effort: "medium",
+    });
+    expect(configs["history-analyzer"]?.toolset).toBe("codex");
+
+    expect(configs.init?.recommendedModel).toBe("chatgpt-plus-pro/gpt-5.4");
+    expect(configs.init?.updateArgs).toEqual({ reasoning_effort: "high" });
+    expect(configs.init?.toolset).toBe("codex");
+
+    expect(configs.memory?.recommendedModel).toBe("chatgpt-plus-pro/gpt-5.4");
+    expect(configs.memory?.updateArgs).toEqual({ reasoning_effort: "medium" });
+    expect(configs.memory?.toolset).toBe("codex");
+
+    expect(configs.recall?.recommendedModel).toBe("chatgpt-plus-pro/gpt-5.4");
+    expect(configs.recall?.updateArgs).toEqual({ reasoning_effort: "low" });
+    expect(configs.recall?.toolset).toBe("codex");
+
+    expect(configs.reflection?.recommendedModel).toBe(
+      "chatgpt-plus-pro/gpt-5.4",
+    );
+    expect(configs.reflection?.updateArgs).toEqual({
+      reasoning_effort: "medium",
+    });
+    expect(configs.reflection?.toolset).toBe("codex");
+  });
+
   test("custom CRLF reflection override replaces built-in reflection", async () => {
     tempDir = createTempProjectDir();
     writeCustomSubagent(

@@ -60,6 +60,10 @@ export interface SubagentConfig {
   allowedTools: string[] | "all";
   /** Recommended model - any model ID from models.json or full handle */
   recommendedModel: string;
+  /** Optional model update args passed through at spawn time */
+  updateArgs?: Record<string, unknown>;
+  /** Optional toolset to use for the spawned subagent */
+  toolset?: string;
   /** Skills to auto-load */
   skills: string[];
   /** Memory blocks the subagent has access to - list of labels or "all" or "none" */
@@ -228,12 +232,27 @@ function parseSubagentContent(content: string): SubagentConfig {
   const name = frontmatter.name as string;
   const description = frontmatter.description as string;
 
+  const updateArgsRaw = getStringField(frontmatter, "updateArgs");
+  let updateArgs: Record<string, unknown> | undefined;
+  if (updateArgsRaw) {
+    try {
+      const parsed = JSON.parse(updateArgsRaw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        updateArgs = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore malformed updateArgs in frontmatter and fall back to no overrides.
+    }
+  }
+
   return {
     name,
     description,
     systemPrompt: body,
     allowedTools: parseTools(getStringField(frontmatter, "tools")),
     recommendedModel: getStringField(frontmatter, "model") || "inherit",
+    updateArgs,
+    toolset: getStringField(frontmatter, "toolset") || undefined,
     skills: parseSkills(getStringField(frontmatter, "skills")),
     memoryBlocks: parseMemoryBlocks(
       getStringField(frontmatter, "memoryBlocks"),

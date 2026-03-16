@@ -2,7 +2,9 @@
 name: memory
 description: Decompose and reorganize memory files into focused, single-purpose files using `/` naming
 tools: Read, Edit, Write, Glob, Grep, Bash, TaskOutput
-model: auto
+model: chatgpt-plus-pro/gpt-5.4
+updateArgs: {"reasoning_effort":"medium"}
+toolset: codex
 memoryBlocks: none
 permissionMode: bypassPermissions
 ---

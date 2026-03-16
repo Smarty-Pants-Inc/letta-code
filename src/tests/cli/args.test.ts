@@ -120,6 +120,23 @@ describe("shared CLI arg schema", () => {
     ).toThrow();
   });
 
+  test("accepts system-custom flag in strict mode", () => {
+    const parsed = parseCliArgs(
+      preprocessCliArgs([
+        "node",
+        "script",
+        "--new-agent",
+        "-p",
+        "hello",
+        "--system-custom",
+        "custom instructions",
+      ]),
+      true,
+    );
+
+    expect(parsed.values["system-custom"]).toBe("custom instructions");
+  });
+
   test("treats --import argument as a flag value, not prompt text", () => {
     const parsed = parseCliArgs(
       preprocessCliArgs([
