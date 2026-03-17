@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -83,6 +83,58 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+function normalizeSignedPath(endpointOrPath: string): string {
+  const raw = String(endpointOrPath || "").trim();
+  if (!raw) return "/";
+
+  try {
+    const u =
+      raw.startsWith("http://") || raw.startsWith("https://")
+        ? new URL(raw)
+        : new URL(raw, "http://localhost");
+    return u.pathname || "/";
+  } catch {
+    const noQuery = raw.split("?")[0] || "/";
+    if (noQuery.startsWith("/")) return noQuery;
+    return `/${noQuery}`;
+  }
+}
+
+function newS2sNonce(): string {
+  try {
+    return randomUUID();
+  } catch {
+    return randomBytes(16).toString("hex");
+  }
+}
+
+function controlPlaneS2sAuthHeaders(args: {
+  sharedSecret: string;
+  method: string;
+  endpointOrPath: string;
+}): Record<string, string> {
+  const secret = String(args.sharedSecret || "").trim();
+  if (!secret) return {};
+
+  const method =
+    String(args.method || "")
+      .trim()
+      .toUpperCase() || "GET";
+  const path = normalizeSignedPath(args.endpointOrPath);
+  const timestamp = String(Date.now());
+  const nonce = newS2sNonce();
+  const canonical = `${method}\n${path}\n${timestamp}\n${nonce}`;
+  const signatureHex = createHmac("sha256", secret)
+    .update(canonical, "utf8")
+    .digest("hex");
+
+  return {
+    "X-SP-S2S-Timestamp": timestamp,
+    "X-SP-S2S-Nonce": nonce,
+    "X-SP-S2S-Signature": signatureHex,
+  };
+}
+
 function deterministicTopicFromConversationId(conversationId: string): string {
   const normalized = conversationId.trim().replace(/\s+/g, "-");
   const fallback = "conversation";
@@ -151,8 +203,7 @@ function loadConfig(startDirectory: string): SmartyProjectZulipConfig | null {
 function readEnv(): ZulipSyncEnv | null {
   const zulipUserEmail = process.env.ZULIP_USER_EMAIL;
   const zulipUserApiKey = process.env.ZULIP_USER_API_KEY;
-  const controlPlaneSharedSecret =
-    process.env.SMARTY_PANTS_ZULIP_FACADE_SHARED_SECRET;
+  const controlPlaneSharedSecret = process.env.CONTROL_PLANE_SHARED_SECRET;
 
   if (
     !isNonEmptyString(zulipUserEmail) ||
@@ -403,23 +454,13 @@ export class LocalZulipSyncManager {
         "/s2s/zulip/runtime_conversation/resolve_by_conversation_id",
         {
           bindingId,
-          binding_id: bindingId,
-          runtimeAgentId: this.config.runtimeAgentId,
-          runtime_agent_id: this.config.runtimeAgentId,
           conversationId: this.conversationId,
-          conversation_id: this.conversationId,
           realmId: this.config.realmId,
-          realm_id: this.config.realmId,
         },
       );
 
       const resolved = getRecord(resolveResult);
-      const threadId = getFirstString(resolved, [
-        "threadId",
-        "thread_id",
-        "zulipThreadId",
-        "runtimeConversationThreadId",
-      ]);
+      const threadId = getFirstString(resolved, ["threadId"]);
 
       if (!threadId) {
         const bootstrapped = await this.bootstrapThreadWithDedupe(bindingId);
@@ -431,18 +472,15 @@ export class LocalZulipSyncManager {
         "/s2s/zulip/threads/get",
         {
           bindingId,
-          binding_id: bindingId,
           threadId,
-          thread_id: threadId,
           realmId: this.config.realmId,
-          realm_id: this.config.realmId,
         },
       );
 
       const threadData = getRecord(threadResult);
       const topic =
-        getFirstString(threadData, ["topic", "topicName", "threadTopic"]) ||
-        getFirstString(resolved, ["topic", "topicName", "threadTopic"]);
+        getFirstString(threadData, ["topic"]) ||
+        getFirstString(resolved, ["topic"]);
 
       if (!topic) {
         this.resolvedThread = null;
@@ -450,22 +488,14 @@ export class LocalZulipSyncManager {
       }
 
       const streamName =
-        getFirstString(threadData, ["streamName", "stream_name"]) ||
-        this.config.streamName;
+        getFirstString(threadData, ["streamName"]) || this.config.streamName;
 
       this.resolvedThread = {
         bindingId,
         threadId,
         streamName,
         topic,
-        anchorMessageId: getFirstNumber(threadData, [
-          "anchorMessageId",
-          "anchor_message_id",
-          "firstMessageId",
-          "first_message_id",
-          "messageId",
-          "message_id",
-        ]),
+        anchorMessageId: getFirstNumber(threadData, ["anchorMessageId"]),
       };
       return this.resolvedThread;
     } catch (error) {
@@ -547,39 +577,23 @@ export class LocalZulipSyncManager {
     const resolvedThread = getRecord(
       await this.controlPlanePost("/s2s/zulip/threads/resolve", {
         realmId: this.config.realmId,
-        realm_id: this.config.realmId,
-        realmName: undefined,
-
         streamId: String(streamId),
-        stream_id: String(streamId),
         streamName: this.config.streamName,
-        stream_name: this.config.streamName,
-
         topic,
         anchorMessageId,
-        anchor_message_id: anchorMessageId,
       }),
     );
 
-    const threadId = getFirstString(resolvedThread, [
-      "threadId",
-      "thread_id",
-      "zulipThreadId",
-      "id",
-    ]);
+    const threadId = getFirstString(resolvedThread, ["threadId"]);
     if (!threadId) {
       throw new Error("Control plane thread resolve did not return thread id");
     }
 
     await this.controlPlanePost("/s2s/zulip/runtime_conversation/upsert", {
       realmId: this.config.realmId,
-      realm_id: this.config.realmId,
       bindingId,
-      binding_id: bindingId,
       threadId,
-      thread_id: threadId,
       conversationId: this.conversationId,
-      conversation_id: this.conversationId,
       source: "created",
     });
 
@@ -594,31 +608,20 @@ export class LocalZulipSyncManager {
 
   private async resolveBindingId(): Promise<string | null> {
     const listResult = await this.controlPlanePost("/s2s/zulip/bindings/list", {
-      runtimeAgentId: this.config.runtimeAgentId,
-      runtime_agent_id: this.config.runtimeAgentId,
       realmId: this.config.realmId,
-      realm_id: this.config.realmId,
     });
 
     const bindings = getArray(listResult);
     for (const item of bindings) {
       const binding = getRecord(item);
 
-      // Control-plane bindings/list returns smartyd.agentId.
-      const smartyd = getRecord(binding.smartyd);
-      const runtimeAgentId = getFirstString(smartyd, [
-        "agentId",
-        "agent_id",
-        "runtimeAgentId",
-        "runtime_agent_id",
-      ]);
+      const runtime = getRecord(binding.runtime);
+      const runtimeAgentId =
+        getFirstString(runtime, ["runtimeAgentId"]) ||
+        getFirstString(binding, ["runtimeAgentId"]);
       if (runtimeAgentId !== this.config.runtimeAgentId) continue;
 
-      const bindingId = getFirstString(binding, [
-        "bindingId",
-        "binding_id",
-        "id",
-      ]);
+      const bindingId = getFirstString(binding, ["bindingId"]);
       if (bindingId) return bindingId;
     }
 
@@ -681,12 +684,16 @@ export class LocalZulipSyncManager {
   ): Promise<unknown> {
     const baseUrl = normalizeBaseUrl(this.config.controlPlaneBaseUrl);
     const url = `${baseUrl}${path}`;
+    const signedHeaders = controlPlaneS2sAuthHeaders({
+      sharedSecret: this.env.controlPlaneSharedSecret,
+      method: "POST",
+      endpointOrPath: path,
+    });
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.env.controlPlaneSharedSecret}`,
-        "x-smarty-pants-secret": this.env.controlPlaneSharedSecret,
+        ...signedHeaders,
       },
       body: JSON.stringify(payload),
     });
