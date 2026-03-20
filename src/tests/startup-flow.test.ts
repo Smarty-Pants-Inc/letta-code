@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Startup flow tests that validate flag conflict handling.
@@ -20,10 +23,18 @@ async function runCli(
   const { timeoutMs = 30000, expectExit } = options;
 
   return new Promise((resolve, reject) => {
+    const fakeHome = mkdtempSync(join(tmpdir(), "letta-startup-flow-home-"));
     const proc = spawn("bun", ["run", "dev", ...args], {
       cwd: projectRoot,
       // Mark as subagent to prevent polluting user's LRU settings
-      env: { ...process.env, LETTA_CODE_AGENT_ROLE: "subagent" },
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+        LETTA_API_KEY: "",
+        LETTA_BASE_URL: "https://api.letta.com",
+        LETTA_SKIP_KEYCHAIN_CHECK: "1",
+        LETTA_CODE_AGENT_ROLE: "subagent",
+      },
     });
 
     let stdout = "";
@@ -48,6 +59,11 @@ async function runCli(
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
+      try {
+        rmSync(fakeHome, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
       if (expectExit !== undefined && code !== expectExit) {
         reject(
           new Error(
@@ -61,6 +77,11 @@ async function runCli(
 
     proc.on("error", (err) => {
       clearTimeout(timeout);
+      try {
+        rmSync(fakeHome, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
       reject(err);
     });
   });
