@@ -202,6 +202,7 @@ import { TrajectorySummary } from "./components/TrajectorySummary";
 import { UserMessage } from "./components/UserMessageRich";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { AnimationProvider } from "./contexts/AnimationContext";
+import { TokenStreamingProvider } from "./contexts/StreamingTextContext";
 import {
   appendStreamingOutput,
   type Buffers,
@@ -1742,6 +1743,19 @@ export default function App({
   // Show compaction messages preference (can be toggled at runtime)
   const [showCompactionsEnabled, _setShowCompactionsEnabled] =
     useState(showCompactions);
+
+  // Typewriter/glow tuning is intentionally internal for now.
+  const tokenStreamingConfig = useMemo(
+    () => ({
+      enabled: tokenStreamingEnabled,
+      style: "typewriter-glow" as const,
+      refreshIntervalMs: 16,
+      typewriterCharsPerSecond: 300,
+      glowChars: 6,
+      glowFadeMs: 140,
+    }),
+    [tokenStreamingEnabled],
+  );
 
   // Live, approximate token counter (resets each turn)
   const [tokenCount, setTokenCount] = useState(0);
@@ -13825,7 +13839,7 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
     trajectoryTokenDisplayRef.current = trajectoryTokenDisplay;
   }, [trajectoryTokenDisplay]);
 
-  return (
+  const appBody = (
     <Box key={resumeKey} flexDirection="column">
       <Static
         key={staticRenderEpoch}
@@ -15103,5 +15117,11 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
         )}
       </Box>
     </Box>
+  );
+
+  return (
+    <TokenStreamingProvider config={tokenStreamingConfig}>
+      {appBody}
+    </TokenStreamingProvider>
   );
 }

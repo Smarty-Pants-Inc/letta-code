@@ -113,6 +113,14 @@ const _colors = {
     secondary: brandColors.primaryAccent,
   },
 
+  // Token streaming highlight (typewriter-glow)
+  // Keep this warm so streaming text reads like an ember cooling into normal text.
+  streamingGlow: {
+    hot: "#FF9500", // bright orange (avoid yellow cast)
+    warm: "#FF5533", // brand orange
+    cool: brandColors.primaryAccent, // cool back into the normal assistant blue
+  },
+
   // Status indicators
   status: {
     error: brandColors.statusError,
