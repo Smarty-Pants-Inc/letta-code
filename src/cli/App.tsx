@@ -3545,57 +3545,73 @@ export default function App({
           setLlmConfig(agent.llm_config);
           setAgentDescription(agent.description ?? null);
 
-          // Infer the system prompt id for footer/selector display by matching the
-          // stored agent.system content against our known prompt presets.
+          // Restore the system prompt id for footer/selector display.
+          // Prefer the persisted preset recipe when available because several
+          // compatibility aliases intentionally share identical content
+          // (e.g. letta / letta-claude / letta-codex). Content-only matching
+          // cannot recover which alias the user selected.
           try {
-            const agentSystem = (agent as { system?: unknown }).system;
-            if (typeof agentSystem === "string") {
-              const normalize = (s: string) => {
-                // Match prompt presets even if memfs addon is enabled/disabled.
-                // The memfs addon is appended to the stored agent.system prompt.
-                const withoutMemfs = s.replace(/\n# Memory[\s\S]*$/, "");
-                return withoutMemfs.replace(/\r\n/g, "\n").trim();
-              };
-              const sysNorm = normalize(agentSystem);
-              const { SYSTEM_PROMPTS, SYSTEM_PROMPT } = await import(
-                "../agent/promptAssets"
-              );
+            const {
+              SYSTEM_PROMPTS,
+              SYSTEM_PROMPT,
+              isKnownPreset,
+            } = await import("../agent/promptAssets");
+            const storedPreset = settingsManager.getSystemPromptPreset(agentId);
 
-              // Best-effort preset detection.
-              // Exact match is ideal, but allow prefix-matches because the stored
-              // agent.system may have additional sections appended.
-              let matched: string | null = null;
-
-              const contentMatches = (content: string): boolean => {
-                const norm = normalize(content);
-                return (
-                  norm === sysNorm ||
-                  (norm.length > 0 &&
-                    (sysNorm.startsWith(norm) || norm.startsWith(sysNorm)))
-                );
-              };
-
-              const defaultPrompt = SYSTEM_PROMPTS.find(
-                (p) => p.id === "default",
-              );
-              if (defaultPrompt && contentMatches(defaultPrompt.content)) {
-                matched = "default";
-              } else {
-                const found = SYSTEM_PROMPTS.find((p) =>
-                  contentMatches(p.content),
-                );
-                if (found) {
-                  matched = found.id;
-                } else if (contentMatches(SYSTEM_PROMPT)) {
-                  // SYSTEM_PROMPT is used when no preset was specified.
-                  // Display as default since it maps to the default selector option.
-                  matched = "default";
-                }
-              }
-
-              setCurrentSystemPromptId(matched ?? "custom");
-            } else {
+            if (storedPreset === "custom") {
               setCurrentSystemPromptId("custom");
+            } else if (
+              typeof storedPreset === "string" &&
+              isKnownPreset(storedPreset)
+            ) {
+              setCurrentSystemPromptId(storedPreset);
+            } else {
+              const agentSystem = (agent as { system?: unknown }).system;
+              if (typeof agentSystem !== "string") {
+                setCurrentSystemPromptId("custom");
+              } else {
+                const normalize = (s: string) => {
+                  // Match prompt presets even if memfs addon is enabled/disabled.
+                  // The memfs addon is appended to the stored agent.system prompt.
+                  const withoutMemfs = s.replace(/\n# Memory[\s\S]*$/, "");
+                  return withoutMemfs.replace(/\r\n/g, "\n").trim();
+                };
+                const sysNorm = normalize(agentSystem);
+
+                // Best-effort preset detection.
+                // Exact match is ideal, but allow prefix-matches because the stored
+                // agent.system may have additional sections appended.
+                let matched: string | null = null;
+
+                const contentMatches = (content: string): boolean => {
+                  const norm = normalize(content);
+                  return (
+                    norm === sysNorm ||
+                    (norm.length > 0 &&
+                      (sysNorm.startsWith(norm) || norm.startsWith(sysNorm)))
+                  );
+                };
+
+                const defaultPrompt = SYSTEM_PROMPTS.find(
+                  (p) => p.id === "default",
+                );
+                if (defaultPrompt && contentMatches(defaultPrompt.content)) {
+                  matched = "default";
+                } else {
+                  const found = SYSTEM_PROMPTS.find((p) =>
+                    contentMatches(p.content),
+                  );
+                  if (found) {
+                    matched = found.id;
+                  } else if (contentMatches(SYSTEM_PROMPT)) {
+                    // SYSTEM_PROMPT is used when no preset was specified.
+                    // Display as default since it maps to the default selector option.
+                    matched = "default";
+                  }
+                }
+
+                setCurrentSystemPromptId(matched ?? "custom");
+              }
             }
           } catch {
             // best-effort only
