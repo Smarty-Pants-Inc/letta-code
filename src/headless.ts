@@ -863,6 +863,19 @@ export async function handleHeadlessCommand(
     console.error("No agent found. Use --new-agent to create a new agent.");
     process.exit(1);
   }
+
+  try {
+    const { ensureConversationMemoryBlock } = await import(
+      "./agent/isolatedBlocks"
+    );
+    await ensureConversationMemoryBlock(client, agent.id);
+  } catch (error) {
+    console.error(
+      `Failed to prepare conversation memory: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
+
   markMilestone("HEADLESS_AGENT_RESOLVED");
 
   // Check if we're resuming an existing agent (not creating a new one)

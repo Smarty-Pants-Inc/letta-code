@@ -1612,6 +1612,18 @@ async function main(): Promise<void> {
           process.exit(1);
         }
 
+        try {
+          const { ensureConversationMemoryBlock } = await import(
+            "./agent/isolatedBlocks"
+          );
+          await ensureConversationMemoryBlock(client, agent.id);
+        } catch (error) {
+          console.error(
+            `Failed to prepare conversation memory: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          process.exit(1);
+        }
+
         // Ensure local project settings are loaded before updating
         // (they may not have been loaded if we didn't try to resume from project settings)
         try {

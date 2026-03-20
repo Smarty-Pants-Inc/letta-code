@@ -1,6 +1,30 @@
 import type { Letta } from "@letta-ai/letta-client";
 import { APIError } from "@letta-ai/letta-client/core/error";
 
+function isMissingAttachedBlockError(err: unknown, label: string): boolean {
+  if (!(err instanceof APIError)) {
+    return false;
+  }
+
+  if (err.status === 404 || err.status === 422) {
+    return true;
+  }
+
+  if (err.status !== 400) {
+    return false;
+  }
+
+  const detail =
+    typeof err.error === "object" &&
+    err.error !== null &&
+    "detail" in err.error &&
+    typeof (err.error as { detail?: unknown }).detail === "string"
+      ? (err.error as { detail: string }).detail
+      : err.message;
+
+  return detail.includes(`Block with label '${label}' not found on agent`);
+}
+
 /**
  * Ensure an agent has all memory blocks required for conversation-isolated labels.
  *
@@ -17,10 +41,7 @@ export async function ensureIsolatedBlockLabels(
       await client.agents.blocks.retrieve(label, { agent_id: agentId });
       continue;
     } catch (err) {
-      if (
-        !(err instanceof APIError) ||
-        (err.status !== 404 && err.status !== 422)
-      ) {
+      if (!isMissingAttachedBlockError(err, label)) {
         throw err;
       }
     }

@@ -12928,11 +12928,6 @@ ${SYSTEM_REMINDER_CLOSE}
     }
   }, [commandRunner, profileConfirmPending]);
 
-  // Track permission mode changes for UI updates
-  const [uiPermissionMode, setUiPermissionMode] = useState(
-    permissionMode.getMode(),
-  );
-
   // Persist permission mode per conversation (e.g., keep YOLO on reconnect).
   //
   // Behavior:
