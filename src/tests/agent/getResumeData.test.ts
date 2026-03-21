@@ -39,6 +39,30 @@ function makeUserMessage(id = "msg-last"): Message {
   } as Message;
 }
 
+function makeAssistantMessage(
+  id = "msg-assistant",
+  date = new Date().toISOString(),
+): Message {
+  return {
+    id,
+    date,
+    message_type: "assistant_message",
+    content: [{ type: "text", text: `assistant:${id}` }],
+  } as unknown as Message;
+}
+
+function makeDatedUserMessage(
+  id = "msg-user",
+  date = new Date().toISOString(),
+): Message {
+  return {
+    id,
+    date,
+    message_type: "user_message",
+    content: [{ type: "text", text: `user:${id}` }],
+  } as unknown as Message;
+}
+
 describe("getResumeData", () => {
   test("includeMessageHistory=false still computes pending approvals without backfill (conversation path)", async () => {
     const conversationsRetrieve = mock(async () => ({
@@ -188,9 +212,86 @@ describe("getResumeData", () => {
       "default",
     );
 
-    expect(messagesRetrieve).toHaveBeenCalledTimes(1);
-    expect(agentsList).toHaveBeenCalledTimes(1);
+    expect(messagesRetrieve).toHaveBeenCalledTimes(2);
+    expect(agentsList).toHaveBeenCalledTimes(0);
     expect(resume.pendingApprovals).toHaveLength(0);
     expect(resume.messageHistory.length).toBeGreaterThan(0);
+  });
+
+  test("explicit conversation backfill prefers in-context ids over conversations.messages.list", async () => {
+    const conversationsRetrieve = mock(async () => ({
+      in_context_message_ids: ["msg-1", "msg-2"],
+    }));
+    const conversationsList = mock(async () => ({
+      getPaginatedItems: () => [makeUserMessage("stale-list-msg")],
+    }));
+    const messagesRetrieve = mock(async (id: string) => {
+      if (id === "msg-1") {
+        return [makeDatedUserMessage("msg-1", "2026-03-20T22:00:00.000Z")];
+      }
+      if (id === "msg-2") {
+        return [makeAssistantMessage("msg-2", "2026-03-20T22:01:00.000Z")];
+      }
+      return [];
+    });
+
+    const client = {
+      conversations: {
+        retrieve: conversationsRetrieve,
+        messages: { list: conversationsList },
+      },
+      messages: { retrieve: messagesRetrieve },
+    } as unknown as Letta;
+
+    const resume = await getResumeData(client, makeAgent(), "conv-abc");
+    const retrievedIds = messagesRetrieve.mock.calls
+      .map((call) => call[0])
+      .sort();
+
+    expect(conversationsRetrieve).toHaveBeenCalledTimes(1);
+    expect(conversationsList).toHaveBeenCalledTimes(0);
+    expect(messagesRetrieve).toHaveBeenCalledTimes(3);
+    expect(retrievedIds).toEqual(["msg-1", "msg-2", "msg-2"]);
+    expect(resume.messageHistory.map((msg) => msg.id)).toEqual([
+      "msg-1",
+      "msg-2",
+    ]);
+  });
+
+  test("default conversation backfill prefers in-context ids over default message list", async () => {
+    const agentsList = mock(async () => ({
+      getPaginatedItems: () => [makeUserMessage("stale-default-msg")],
+    }));
+    const messagesRetrieve = mock(async (id: string) => {
+      if (id === "msg-1") {
+        return [makeDatedUserMessage("msg-1", "2026-03-20T22:00:00.000Z")];
+      }
+      if (id === "msg-2") {
+        return [makeAssistantMessage("msg-2", "2026-03-20T22:01:00.000Z")];
+      }
+      return [];
+    });
+
+    const client = {
+      agents: { messages: { list: agentsList } },
+      messages: { retrieve: messagesRetrieve },
+    } as unknown as Letta;
+
+    const resume = await getResumeData(
+      client,
+      makeAgent({ in_context_message_ids: ["msg-1", "msg-2"] }),
+      "default",
+    );
+    const retrievedIds = messagesRetrieve.mock.calls
+      .map((call) => call[0])
+      .sort();
+
+    expect(agentsList).toHaveBeenCalledTimes(0);
+    expect(messagesRetrieve).toHaveBeenCalledTimes(3);
+    expect(retrievedIds).toEqual(["msg-1", "msg-2", "msg-2"]);
+    expect(resume.messageHistory.map((msg) => msg.id)).toEqual([
+      "msg-1",
+      "msg-2",
+    ]);
   });
 });

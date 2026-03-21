@@ -45,6 +45,7 @@ function isAnchorMessageType(messageType: string | undefined): boolean {
 // Fetch more than we render so non-rendered tail events (e.g. usage/stop chunks)
 // don't push the last user-visible assistant message out of the backfill window.
 const BACKFILL_FETCH_LIMIT = 100;
+const BACKFILL_IN_CONTEXT_BATCH_SIZE = 10;
 
 /**
  * Check if message backfilling is enabled via LETTA_BACKFILL env var.
@@ -323,6 +324,49 @@ async function fetchConversationBackfillMessages(
   return sortChronological(collected);
 }
 
+// TEMPORARY WORKAROUND for letta-ai/letta-code#1475.
+//
+// Until the upstream conversations/default history list endpoints stop
+// returning stale slices on reconnect, rebuild resume backfill from the current
+// in-context message ids instead. Remove this helper once the upstream issue is
+// fixed and list() is trustworthy again.
+async function fetchBackfillMessagesFromInContextIds(
+  client: Letta,
+  messageIds: string[],
+): Promise<Message[]> {
+  const recentIds = messageIds
+    .filter((id): id is string => typeof id === "string" && id.length > 0)
+    .slice(-BACKFILL_FETCH_LIMIT);
+  if (recentIds.length === 0) return [];
+
+  const collected: Message[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < recentIds.length; i += BACKFILL_IN_CONTEXT_BATCH_SIZE) {
+    const batchIds = recentIds.slice(i, i + BACKFILL_IN_CONTEXT_BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batchIds.map((id) => client.messages.retrieve(id)),
+    );
+
+    for (const variants of batchResults) {
+      for (const m of variants) {
+        if (!m?.id) continue;
+
+        const key =
+          "otid" in m && (m as { otid?: unknown }).otid
+            ? `otid:${String((m as { otid?: unknown }).otid)}`
+            : `id:${m.id}:${m.message_type ?? ""}`;
+
+        if (seen.has(key)) continue;
+        seen.add(key);
+        collected.push(m);
+      }
+    }
+  }
+
+  return sortChronological(collected);
+}
+
 /**
  * Gets data needed to resume an agent session.
  * Checks for pending approvals and retrieves recent message history for backfill.
@@ -402,9 +446,13 @@ export async function getResumeData(
       // Wrapped in try/catch so backfill failures don't crash the CLI
       if (includeMessageHistory && isBackfillEnabled()) {
         try {
-          messages = await fetchConversationBackfillMessages(
+          // TEMPORARY WORKAROUND for letta-ai/letta-code#1475:
+          // conversations.messages.list(...) can return stale history during
+          // reconnect/resume. Prefer the current in-context message ids until
+          // the upstream API bug is fixed, then this helper can be removed.
+          messages = await fetchBackfillMessagesFromInContextIds(
             client,
-            conversationId,
+            inContextMessageIds,
           );
         } catch (backfillError) {
           debugWarn(
@@ -460,7 +508,26 @@ export async function getResumeData(
       inContextMessageIds = agentWithInContext.in_context_message_ids;
       const lastInContextId = inContextMessageIds?.at(-1);
       let defaultConversationMessages: Message[] = [];
-      if ((includeMessageHistory && isBackfillEnabled()) || !lastInContextId) {
+      if (includeMessageHistory && isBackfillEnabled() && inContextMessageIds) {
+        try {
+          // TEMPORARY WORKAROUND for letta-ai/letta-code#1475:
+          // prefer the agent's current in-context ids over default-conversation
+          // list endpoints, which can replay stale history on reconnect.
+          messages = await fetchBackfillMessagesFromInContextIds(
+            client,
+            inContextMessageIds,
+          );
+        } catch (backfillError) {
+          debugWarn(
+            "check-approval",
+            `Failed to load message history: ${backfillError instanceof Error ? backfillError.message : String(backfillError)}`,
+          );
+        }
+      }
+      if (
+        (!inContextMessageIds || inContextMessageIds.length === 0) &&
+        ((includeMessageHistory && isBackfillEnabled()) || !lastInContextId)
+      ) {
         const listLimit =
           includeMessageHistory && isBackfillEnabled()
             ? BACKFILL_PAGE_LIMIT
