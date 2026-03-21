@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { LettaStreamingResponse } from "@letta-ai/letta-client/resources/agents/messages";
-import { createBuffers, onChunk } from "../../cli/helpers/accumulator";
+import {
+  createBuffers,
+  onChunk,
+  toLines,
+} from "../../cli/helpers/accumulator";
 import { createContextTracker } from "../../cli/helpers/contextTracker";
 
 function usageChunk(
@@ -286,6 +290,88 @@ describe("accumulator usage statistics", () => {
     expect(assistant?.kind).toBe("assistant");
     expect(assistant && "text" in assistant ? assistant.text : "").toBe(
       "Final answer",
+    );
+  });
+
+  test("keeps long assistant markdown on one logical line", () => {
+    const buffers = createBuffers();
+    const longParagraph = "A".repeat(1550);
+    const suffix = "\n\n**Heading**\n\nBody paragraph";
+
+    onChunk(buffers, {
+      message_type: "assistant_message",
+      id: "assistant-long-1",
+      content: [{ type: "text", text: longParagraph + suffix }],
+    } as unknown as LettaStreamingResponse);
+
+    expect(buffers.order).toEqual(["assistant-long-1"]);
+    expect(toLines(buffers)).toHaveLength(1);
+
+    const line = buffers.byId.get("assistant-long-1");
+    expect(line?.kind).toBe("assistant");
+    expect(line && "text" in line ? line.text : "").toBe(
+      longParagraph + suffix,
+    );
+  });
+
+  test("keeps long reasoning markdown on one logical line", () => {
+    const buffers = createBuffers();
+    const longParagraph = "B".repeat(1550);
+    const suffix = "\n\n## Plan\n\nStep 1\n\nStep 2";
+
+    onChunk(buffers, {
+      message_type: "reasoning_message",
+      id: "reasoning-long-1",
+      reasoning: longParagraph + suffix,
+    } as unknown as LettaStreamingResponse);
+
+    expect(buffers.order).toEqual(["reasoning-long-1"]);
+    expect(toLines(buffers)).toHaveLength(1);
+
+    const line = buffers.byId.get("reasoning-long-1");
+    expect(line?.kind).toBe("reasoning");
+    expect(line && "text" in line ? line.text : "").toBe(
+      longParagraph + suffix,
+    );
+  });
+
+  test("assistant chunks are appended literally without text-level replay heuristics", () => {
+    const buffers = createBuffers();
+
+    onChunk(buffers, {
+      message_type: "assistant_message",
+      id: "assistant-repeat-1",
+      content: [{ type: "text", text: "Hello" }],
+    } as unknown as LettaStreamingResponse);
+    onChunk(buffers, {
+      message_type: "assistant_message",
+      id: "assistant-repeat-1",
+      content: [{ type: "text", text: "Hello world" }],
+    } as unknown as LettaStreamingResponse);
+
+    const line = buffers.byId.get("assistant-repeat-1");
+    expect(line?.kind).toBe("assistant");
+    expect(line && "text" in line ? line.text : "").toBe("HelloHello world");
+  });
+
+  test("reasoning chunks preserve repeated long content literally", () => {
+    const buffers = createBuffers();
+
+    onChunk(buffers, {
+      message_type: "reasoning_message",
+      id: "reasoning-repeat-1",
+      reasoning: "Conclusion: keep the cache warm.",
+    } as unknown as LettaStreamingResponse);
+    onChunk(buffers, {
+      message_type: "reasoning_message",
+      id: "reasoning-repeat-1",
+      reasoning: "Conclusion: keep the cache warm.",
+    } as unknown as LettaStreamingResponse);
+
+    const line = buffers.byId.get("reasoning-repeat-1");
+    expect(line?.kind).toBe("reasoning");
+    expect(line && "text" in line ? line.text : "").toBe(
+      "Conclusion: keep the cache warm.Conclusion: keep the cache warm.",
     );
   });
 });

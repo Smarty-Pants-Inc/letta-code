@@ -1,25 +1,17 @@
 import { Box } from "ink";
 import { memo } from "react";
 import { useTokenStreamingConfig } from "../contexts/StreamingTextContext";
+import { normalizeStreamingText } from "../helpers/normalizeStreamingText";
 import { useTerminalWidth } from "../hooks/useTerminalWidth";
 import { MarkdownDisplay } from "./MarkdownDisplay.js";
 import { Text } from "./Text";
 import { TypewriterGlowText } from "./TypewriterGlowText";
-
-// Helper function to normalize text - copied from old codebase
-// NOTE: Less aggressive than before to preserve spacing when content is split across chunks
-const normalize = (s: string) =>
-  s
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/g, ""); // Only trim leading newlines, preserve trailing ones
 
 type AssistantLine = {
   kind: "assistant";
   id: string;
   text: string;
   phase: "streaming" | "finished";
-  isContinuation?: boolean;
 };
 
 /**
@@ -27,9 +19,9 @@ type AssistantLine = {
  * This is a direct port from the old letta-code codebase to preserve the exact styling
  *
  * Features:
- * - Left column (2 chars wide) with bullet point marker (unless continuation)
+ * - Left column (2 chars wide) with bullet point marker
  * - Right column with wrapped text content
- * - Proper text normalization
+ * - Lossless newline normalization
  * - Support for markdown rendering (when MarkdownDisplay is available)
  */
 export const AssistantMessage = memo(({ line }: { line: AssistantLine }) => {
@@ -37,7 +29,7 @@ export const AssistantMessage = memo(({ line }: { line: AssistantLine }) => {
   const contentWidth = Math.max(0, columns - 2);
   const streamCfg = useTokenStreamingConfig();
 
-  const normalizedText = normalize(line.text);
+  const normalizedText = normalizeStreamingText(line.text);
   if (!normalizedText.trim()) {
     return null;
   }
@@ -50,7 +42,7 @@ export const AssistantMessage = memo(({ line }: { line: AssistantLine }) => {
   return (
     <Box flexDirection="row">
       <Box width={2} flexShrink={0}>
-        <Text>{line.isContinuation ? " " : "●"}</Text>
+        <Text>●</Text>
       </Box>
       <Box flexGrow={1} width={contentWidth}>
         {useTypewriterGlow ? (

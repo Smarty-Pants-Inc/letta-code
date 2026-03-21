@@ -15,7 +15,6 @@ import { debugLog } from "../../utils/debug";
 import { extractCompactionSummary } from "./backfill";
 import type { ContextTracker } from "./contextTracker";
 import { MAX_CONTEXT_HISTORY } from "./contextTracker";
-import { findLastSafeSplitPoint } from "./markdownSplit";
 import { isShellOutputTool } from "./toolNameMapping";
 
 type CompactionSummaryMessageChunk = {
@@ -142,14 +141,12 @@ export type Line =
       id: string;
       text: string;
       phase: "streaming" | "finished";
-      isContinuation?: boolean; // true for split continuation lines (no header)
     }
   | {
       kind: "assistant";
       id: string;
       text: string;
       phase: "streaming" | "finished";
-      isContinuation?: boolean; // true for split continuation lines (no bullet)
     }
   | {
       kind: "tool_call";
@@ -260,9 +257,6 @@ export type Buffers = {
     contextTokens?: number;
     stepCount: number;
   };
-  // Aggressive static promotion: split streaming content at paragraph boundaries
-  tokenStreamingEnabled?: boolean;
-  splitCounters: Map<string, number>; // tracks split count per original otid
   // Track server-side tool calls for hook triggering (toolCallId -> info)
   serverToolCalls: Map<string, ServerToolCallInfo>;
   // Track if this run has pending approvals (used to gate server tool phases)
@@ -294,8 +288,6 @@ export function createBuffers(agentId?: string): Buffers {
       reasoningTokens: 0,
       stepCount: 0,
     },
-    tokenStreamingEnabled: false,
-    splitCounters: new Map(),
     serverToolCalls: new Map(),
     approvalsPending: false,
     agentId,
@@ -633,63 +625,6 @@ function resolveReasoningLineId(
   return lineId;
 }
 
-/**
- * Attempts to split content at a paragraph boundary for aggressive static promotion.
- * If split found, creates a committed line for "before" and updates original with "after".
- * Returns true if split occurred, false otherwise.
- */
-function trySplitContent(
-  b: Buffers,
-  id: string,
-  kind: "assistant" | "reasoning",
-  newText: string,
-): boolean {
-  if (!b.tokenStreamingEnabled) return false;
-
-  const splitPoint = findLastSafeSplitPoint(newText);
-  if (splitPoint >= newText.length) return false; // No safe split point
-
-  const beforeText = newText.substring(0, splitPoint);
-  const afterText = newText.substring(splitPoint);
-
-  // Get or initialize split counter for this original ID
-  const counter = b.splitCounters.get(id) ?? 0;
-  b.splitCounters.set(id, counter + 1);
-
-  // Create committed line for "before" content
-  // Only the first split (counter=0) shows the bullet/header; subsequent splits are continuations
-  const commitId = `${id}-split-${counter}`;
-  const committedLine = {
-    kind,
-    id: commitId,
-    text: beforeText,
-    phase: "finished" as const,
-    isContinuation: counter > 0, // First split shows bullet, subsequent don't
-  };
-  b.byId.set(commitId, committedLine);
-
-  // Insert committed line BEFORE the original in order array
-  const originalIndex = b.order.indexOf(id);
-  if (originalIndex !== -1) {
-    b.order.splice(originalIndex, 0, commitId);
-  } else {
-    // Should not happen, but handle gracefully
-    b.order.push(commitId);
-  }
-
-  // Update original line with just the "after" content (keep streaming)
-  // Mark it as a continuation so it doesn't show bullet/header
-  const originalLine = b.byId.get(id);
-  if (
-    originalLine &&
-    (originalLine.kind === "assistant" || originalLine.kind === "reasoning")
-  ) {
-    b.byId.set(id, { ...originalLine, text: afterText, isContinuation: true });
-  }
-
-  return true;
-}
-
 // Feed one SDK chunk; mutate buffers in place.
 export function onChunk(
   b: Buffers,
@@ -732,14 +667,12 @@ export function onChunk(
         phase: "streaming",
       }));
       if (delta) {
+        // Treat streamed reasoning text as literal deltas. If we ever need
+        // replay de-duplication, it should happen earlier using stream
+        // metadata (run_id/seq_id), not by guessing from the message text.
         const newText = line.text + delta;
         b.tokenCount += delta.length;
-
-        // Try to split at paragraph boundary (only if streaming enabled)
-        if (!trySplitContent(b, id, "reasoning", newText)) {
-          // No split - normal accumulation
-          b.byId.set(id, { ...line, text: newText });
-        }
+        b.byId.set(id, { ...line, text: newText });
         // console.log(`[REASONING] Updated ${id}, textLen=${newText.length}`);
       }
       break;
@@ -766,14 +699,12 @@ export function onChunk(
         phase: "streaming",
       }));
       if (delta) {
+        // Treat streamed assistant text as literal deltas. If we ever need
+        // replay de-duplication, it should happen earlier using stream
+        // metadata (run_id/seq_id), not by guessing from the message text.
         const newText = line.text + delta;
         b.tokenCount += delta.length;
-
-        // Try to split at paragraph boundary (only if streaming enabled)
-        if (!trySplitContent(b, id, "assistant", newText)) {
-          // No split - normal accumulation
-          b.byId.set(id, { ...line, text: newText });
-        }
+        b.byId.set(id, { ...line, text: newText });
       }
       break;
     }

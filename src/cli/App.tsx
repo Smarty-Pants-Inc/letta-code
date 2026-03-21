@@ -2716,11 +2716,6 @@ export default function App({
   // Track whether we've already backfilled history (should only happen once)
   const hasBackfilledRef = useRef(false);
 
-  // Keep buffers in sync with tokenStreamingEnabled state for aggressive static promotion
-  useEffect(() => {
-    buffersRef.current.tokenStreamingEnabled = tokenStreamingEnabled;
-  }, [tokenStreamingEnabled]);
-
   // Configurable status line hook
   const sessionStatsSnapshot = sessionStatsRef.current.getSnapshot();
   const contextWindowSize = llmConfigRef.current?.context_window;
