@@ -103,19 +103,22 @@ export function buildConversationMessagesCreateRequestBody(
   ).trim();
   const overrideModel = opts.overrideModel || envOverrideModel;
 
-  const includeReturnMessageTypes = enableThinking
-    ? ([
-        "assistant_message",
-        "reasoning_message",
-        "hidden_reasoning_message",
-        "tool_call_message",
-        "tool_return_message",
-        "approval_request_message",
-        "approval_response_message",
-        "summary_message",
-        "event_message",
-      ] as string[])
-    : undefined;
+  const includeReturnMessageTypes: ConversationMessageCreateParams["include_return_message_types"] =
+    enableThinking
+      ? ([
+          "assistant_message",
+          "reasoning_message",
+          "hidden_reasoning_message",
+          "tool_call_message",
+          "tool_return_message",
+          "approval_request_message",
+          "approval_response_message",
+          "summary_message",
+          "event_message",
+        ] as NonNullable<
+          ConversationMessageCreateParams["include_return_message_types"]
+        >)
+      : undefined;
 
   return {
     messages: normalizeOutgoingApprovalMessages(

@@ -372,9 +372,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // Initialize telemetry (enabled by default, opt-out via LETTA_CODE_TELEM=0)
-  telemetry.init();
-
   // Check for updates on startup (non-blocking)
   const { checkAndAutoUpdate } = await import("./updater/auto-update");
   const autoUpdatePromise = startStartupAutoUpdateCheck(checkAndAutoUpdate);
@@ -537,6 +534,11 @@ async function main(): Promise<void> {
     fromAfFlagValue: values["from-af"],
   });
   const isHeadless = values.prompt || values.run || !process.stdin.isTTY;
+
+  // Initialize telemetry (enabled by default, opt-out via LETTA_CODE_TELEM=0)
+  // Surface is set here so session_start captures the correct mode.
+  telemetry.setSurface(isHeadless ? "headless" : "tui");
+  telemetry.init();
 
   // Fail if an unknown command/argument is passed (and we're not in headless mode where it might be a prompt)
   if (command && !isHeadless) {
@@ -1730,7 +1732,11 @@ async function main(): Promise<void> {
             // Always apply model update - different model IDs can share the same
             // handle but have different settings (e.g., gpt-5.2-medium vs gpt-5.2-xhigh)
             const updateArgs = getModelUpdateArgs(model);
-            agent = await updateAgentLLMConfig(agent.id, modelHandle, updateArgs);
+            agent = await updateAgentLLMConfig(
+              agent.id,
+              modelHandle,
+              updateArgs,
+            );
 
             if (!toolset) {
               const { forceToolsetSwitch } = await import("./tools/toolset");
@@ -2234,9 +2240,7 @@ async function main(): Promise<void> {
     return raw === "1" || raw === "true" || raw === "yes" || raw === "y";
   })();
 
-  const bridgeAutoContinue =
-    bridgeAutoEnabled &&
-    !shouldContinue &&
+  const shouldContinue =
     !shouldResume &&
     !forceNew &&
     !forceNewConversation &&
@@ -2244,6 +2248,8 @@ async function main(): Promise<void> {
     !specifiedAgentId &&
     !specifiedAgentName &&
     !fromAfFile;
+
+  const bridgeAutoContinue = bridgeAutoEnabled && shouldContinue;
 
   const effectiveContinueSession = shouldContinue || bridgeAutoContinue;
   render(

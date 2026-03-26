@@ -1230,6 +1230,8 @@ export async function handleHeadlessCommand(
       agent_id: agent.id,
       conversation_id: conversationId,
       model: agent.llm_config?.model ?? "",
+      // Backward-compatible extension used by stream-json consumers that want
+      // to display the currently active reasoning tier in the init envelope.
       reasoning_effort: (
         agent.llm_config as { reasoning_effort?: string | null } | undefined
       )?.reasoning_effort,

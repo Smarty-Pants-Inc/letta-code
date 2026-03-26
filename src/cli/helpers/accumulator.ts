@@ -671,7 +671,7 @@ export function onChunk(
         // replay de-duplication, it should happen earlier using stream
         // metadata (run_id/seq_id), not by guessing from the message text.
         const newText = line.text + delta;
-        b.tokenCount += delta.length;
+        b.tokenCount += Buffer.byteLength(delta, "utf8");
         b.byId.set(id, { ...line, text: newText });
         // console.log(`[REASONING] Updated ${id}, textLen=${newText.length}`);
       }
@@ -703,7 +703,7 @@ export function onChunk(
         // replay de-duplication, it should happen earlier using stream
         // metadata (run_id/seq_id), not by guessing from the message text.
         const newText = line.text + delta;
-        b.tokenCount += delta.length;
+        b.tokenCount += Buffer.byteLength(delta, "utf8");
         b.byId.set(id, { ...line, text: newText });
       }
       break;
@@ -821,7 +821,7 @@ export function onChunk(
         line = updatedLine;
         b.byId.set(id, updatedLine);
         // Count tool call arguments as LLM output tokens
-        b.tokenCount += argsText.length;
+        b.tokenCount += Buffer.byteLength(argsText, "utf8");
       }
 
       // Track server-side tools and trigger PreToolUse hook (fire-and-forget since execution already started)

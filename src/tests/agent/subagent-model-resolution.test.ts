@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { resolveSystemPrompt } from "../../agent/promptAssets";
 import type { SubagentConfig } from "../../agent/subagents";
 import {
   buildSubagentArgs,
   resolveSubagentLauncher,
   resolveSubagentModel,
 } from "../../agent/subagents/manager";
-import { resolveSystemPrompt } from "../../agent/promptAssets";
 
 describe("resolveSubagentLauncher", () => {
   test("explicit launcher takes precedence over .ts script autodetection", () => {
@@ -157,6 +157,10 @@ describe("buildSubagentArgs", () => {
     expect(systemCustomIndex).toBeGreaterThanOrEqual(0);
 
     const combinedPrompt = args[systemCustomIndex + 1];
+    expect(combinedPrompt).toBeDefined();
+    if (!combinedPrompt) {
+      throw new Error("missing combined prompt");
+    }
     expect(combinedPrompt).toContain("# Subagent: explore");
     expect(combinedPrompt).toContain(config.systemPrompt);
     const canonicalBasePrompt = await resolveSystemPrompt("letta");

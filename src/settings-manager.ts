@@ -135,6 +135,10 @@ export interface LocalProjectSettings {
   // Stored per server and per (agentId, conversationId) so reconnect can replay everything
   // since the last seen message.
   followCursorsByServer?: Record<string, Record<string, string>>;
+
+  // Prompt history per conversation for the current project.
+  // Stored per server and per (agentId, conversationId).
+  promptHistoryByServer?: Record<string, Record<string, string[]>>;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -1174,6 +1178,58 @@ class SettingsManager {
     const session: SessionRef = { agentId, conversationId };
     this.setLocalLastSession(session, workingDirectory);
     this.setGlobalLastSession(session);
+  }
+
+  private getPromptHistoryKey(agentId: string, conversationId: string): string {
+    return `${agentId}:${conversationId}`;
+  }
+
+  getPromptHistory(
+    agentId: string,
+    conversationId: string,
+    workingDirectory: string = process.cwd(),
+  ): string[] {
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const localSettings = this.getLocalProjectSettings(workingDirectory);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+    const history = localSettings.promptHistoryByServer?.[serverKey]?.[key];
+    return Array.isArray(history)
+      ? history.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }
+
+  appendPromptHistory(
+    agentId: string,
+    conversationId: string,
+    entry: string,
+    workingDirectory: string = process.cwd(),
+    maxEntries = 200,
+  ): void {
+    const normalized = entry.trimEnd();
+    if (!normalized.trim()) return;
+
+    const settings = this.getSettings();
+    const serverKey = getCurrentServerKey(settings);
+    const localSettings = this.getLocalProjectSettings(workingDirectory);
+    const key = this.getPromptHistoryKey(agentId, conversationId);
+
+    const promptHistoryByServer = {
+      ...(localSettings.promptHistoryByServer || {}),
+    };
+    const serverHistory = { ...(promptHistoryByServer[serverKey] || {}) };
+    const current = Array.isArray(serverHistory[key]) ? serverHistory[key] : [];
+    const last = current[current.length - 1];
+    if (typeof last === "string" && last.trimEnd() === normalized) {
+      return;
+    }
+
+    serverHistory[key] = [...current, normalized].slice(-maxEntries);
+    promptHistoryByServer[serverKey] = serverHistory;
+    this.updateLocalProjectSettings(
+      { promptHistoryByServer },
+      workingDirectory,
+    );
   }
 
   // =====================================================================

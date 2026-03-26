@@ -282,6 +282,7 @@ import {
 } from "./helpers/reflectionTranscript";
 import { safeJsonParseOr } from "./helpers/safeJsonParse";
 import { getDeviceType, getLocalTime } from "./helpers/sessionContext";
+import { buildStartupSystemPromptWarning } from "./helpers/startupSystemPromptWarning";
 import {
   resolvePromptChar,
   resolveStatusLineConfig,
@@ -1976,9 +1977,7 @@ export default function App({
   const [staticItems, setStaticItems] = useState<StaticItem[]>([]);
 
   // Show in-transcript notification when auto-update applied a significant new version
-  const [_footerUpdateText, setFooterUpdateText] = useState<string | null>(
-    null,
-  );
+  const [footerUpdateText, setFooterUpdateText] = useState<string | null>(null);
   useEffect(() => {
     if (!updateNotification) return;
     setStaticItems((prev) => {
@@ -3347,12 +3346,18 @@ export default function App({
       // Build status lines with optional release notes above header
       const statusLines: string[] = [];
 
+      const startupSystemPromptWarning =
+        buildStartupSystemPromptWarning(agentState);
+
       // Add release notes first (above everything) - same styling as rest of status block
       if (releaseNotes) {
         statusLines.push(releaseNotes);
         statusLines.push(""); // blank line separator
       }
 
+      if (startupSystemPromptWarning) {
+        statusLines.push(startupSystemPromptWarning);
+      }
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
 
@@ -3623,11 +3628,8 @@ export default function App({
           // (e.g. letta / letta-claude / letta-codex). Content-only matching
           // cannot recover which alias the user selected.
           try {
-            const {
-              SYSTEM_PROMPTS,
-              SYSTEM_PROMPT,
-              isKnownPreset,
-            } = await import("../agent/promptAssets");
+            const { SYSTEM_PROMPTS, SYSTEM_PROMPT, isKnownPreset } =
+              await import("../agent/promptAssets");
             const storedPreset = settingsManager.getSystemPromptPreset(agentId);
 
             if (storedPreset === "custom") {
@@ -5990,17 +5992,14 @@ export default function App({
                 // We only auto-approve when the tool is the *only* pending approval for
                 // this stop, to avoid surprising interactions when multiple tools are
                 // requested in parallel.
-                if (
-                  approvalsToProcess.length === 1 &&
-                  needsUserInput.length === 1
-                ) {
-                  const only = needsUserInput[0];
+                if (serverApprovals.length === 1) {
+                  const only = serverApprovals[0];
                   if (
                     only &&
-                    only.approval.toolName === "EnterPlanMode" &&
+                    only.toolName === "EnterPlanMode" &&
                     shouldAutoApproveEnterPlanMode()
                   ) {
-                    const approvalItem = only.approval;
+                    const approvalItem = only;
                     const planFilePath = generatePlanFilePath();
                     const applyPatchRelativePath = relative(
                       process.cwd(),
@@ -6074,10 +6073,10 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
 
                   if (
                     only &&
-                    only.approval.toolName === "ExitPlanMode" &&
+                    only.toolName === "ExitPlanMode" &&
                     shouldAutoApproveExitPlanMode()
                   ) {
-                    const approvalItem = only.approval;
+                    const approvalItem = only;
 
                     // Capture plan file path BEFORE exiting plan mode (for post-approval rendering)
                     const planFilePath = permissionMode.getPlanFilePath();
@@ -6092,10 +6091,9 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
                     setUiPermissionMode(restoreMode);
 
                     try {
-                      const parsedArgs = safeJsonParseOr<Record<string, unknown>>(
-                        approvalItem.toolArgs,
-                        {},
-                      );
+                      const parsedArgs = safeJsonParseOr<
+                        Record<string, unknown>
+                      >(approvalItem.toolArgs, {});
                       const toolResult = await executeTool(
                         "ExitPlanMode",
                         parsedArgs,
@@ -12553,7 +12551,9 @@ ${SYSTEM_REMINDER_CLOSE}
             setCurrentToolsetPreference("auto");
 
             if (currentSystemPromptId !== targetSystemPromptId) {
-              const { updateAgentSystemPrompt } = await import("../agent/modify");
+              const { updateAgentSystemPrompt } = await import(
+                "../agent/modify"
+              );
               const promptResult = await updateAgentSystemPrompt(
                 agentId,
                 targetSystemPromptId,
@@ -14209,12 +14209,18 @@ If using apply_patch, use this exact relative patch path: ${applyPatchRelativePa
       // Build status lines with optional release notes above header
       const statusLines: string[] = [];
 
+      const startupSystemPromptWarning =
+        buildStartupSystemPromptWarning(agentState);
+
       // Add release notes first (above everything) - same styling as rest of status block
       if (releaseNotes) {
         statusLines.push(releaseNotes);
         statusLines.push(""); // blank line separator
       }
 
+      if (startupSystemPromptWarning) {
+        statusLines.push(startupSystemPromptWarning);
+      }
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
 

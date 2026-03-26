@@ -28,6 +28,7 @@ import {
   resetSharedReminderState,
 } from "../../reminders/state";
 import { settingsManager } from "../../settings-manager";
+import { telemetry } from "../../telemetry";
 import { loadTools } from "../../tools/manager";
 import type {
   AbortMessageCommand,
@@ -50,6 +51,7 @@ import {
   resolvePendingApprovalResolver,
   resolveRecoveryBatchId,
 } from "./approval";
+import { handleExecuteCommand } from "./commands";
 import {
   INITIAL_RETRY_DELAY_MS,
   MAX_RETRY_DELAY_MS,
@@ -76,7 +78,9 @@ import {
   persistPermissionModeMapForRuntime,
 } from "./permissionMode";
 import {
+  isEditFileCommand,
   isEnableMemfsCommand,
+  isExecuteCommandCommand,
   isListInDirectoryCommand,
   isListMemoryCommand,
   isReadFileCommand,
@@ -863,6 +867,7 @@ export async function startListenerClient(
   runtime.connectionId = opts.connectionId;
   runtime.connectionName = opts.connectionName;
   setActiveRuntime(runtime);
+  telemetry.setSurface("websocket");
 
   await connectWithRetry(runtime, opts);
 }
@@ -1349,10 +1354,16 @@ async function connectWithRetry(
 
     // ── File reading (no runtime scope required) ─────────────────────
     if (isReadFileCommand(parsed)) {
+      console.log(
+        `[Listen] Received read_file command: path=${parsed.path}, request_id=${parsed.request_id}`,
+      );
       void (async () => {
         try {
           const { readFile } = await import("node:fs/promises");
           const content = await readFile(parsed.path, "utf-8");
+          console.log(
+            `[Listen] read_file success: ${parsed.path} (${content.length} bytes)`,
+          );
           socket.send(
             JSON.stringify({
               type: "read_file_response",
@@ -1363,6 +1374,9 @@ async function connectWithRetry(
             }),
           );
         } catch (err) {
+          console.error(
+            `[Listen] read_file error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          );
           socket.send(
             JSON.stringify({
               type: "read_file_response",
@@ -1371,6 +1385,58 @@ async function connectWithRetry(
               content: null,
               success: false,
               error: err instanceof Error ? err.message : "Failed to read file",
+            }),
+          );
+        }
+      })();
+      return;
+    }
+
+    // ── File editing (no runtime scope required) ─────────────────────
+    if (isEditFileCommand(parsed)) {
+      console.log(
+        `[Listen] Received edit_file command: file_path=${parsed.file_path}, request_id=${parsed.request_id}`,
+      );
+      void (async () => {
+        try {
+          const { edit } = await import("../../tools/impl/Edit");
+          console.log(
+            `[Listen] Executing edit: old_string="${parsed.old_string.slice(0, 50)}${parsed.old_string.length > 50 ? "..." : ""}"`,
+          );
+          const result = await edit({
+            file_path: parsed.file_path,
+            old_string: parsed.old_string,
+            new_string: parsed.new_string,
+            replace_all: parsed.replace_all,
+            expected_replacements: parsed.expected_replacements,
+          });
+          console.log(
+            `[Listen] edit_file success: ${result.replacements} replacement(s) at line ${result.startLine}`,
+          );
+          socket.send(
+            JSON.stringify({
+              type: "edit_file_response",
+              request_id: parsed.request_id,
+              file_path: parsed.file_path,
+              message: result.message,
+              replacements: result.replacements,
+              start_line: result.startLine,
+              success: true,
+            }),
+          );
+        } catch (err) {
+          console.error(
+            `[Listen] edit_file error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          );
+          socket.send(
+            JSON.stringify({
+              type: "edit_file_response",
+              request_id: parsed.request_id,
+              file_path: parsed.file_path,
+              message: null,
+              replacements: 0,
+              success: false,
+              error: err instanceof Error ? err.message : "Failed to edit file",
             }),
           );
         }
@@ -1524,6 +1590,21 @@ async function connectWithRetry(
       return;
     }
 
+    // ── Slash commands (execute_command) ────────────────────────────────
+    if (isExecuteCommandCommand(parsed)) {
+      // Slash commands need a scoped runtime for the conversation context
+      const scopedRuntime = getOrCreateScopedRuntime(
+        runtime,
+        parsed.runtime.agent_id,
+        parsed.runtime.conversation_id,
+      );
+      void handleExecuteCommand(parsed, socket, scopedRuntime, {
+        onStatusChange: opts.onStatusChange,
+        connectionId: opts.connectionId,
+      });
+      return;
+    }
+
     // ── Terminal commands (no runtime scope required) ──────────────────
     if (parsed.type === "terminal_spawn") {
       handleTerminalSpawn(
@@ -1658,6 +1739,7 @@ export function stopListenerClient(): void {
     return;
   }
   setActiveRuntime(null);
+  telemetry.setSurface(process.stdin.isTTY ? "tui" : "headless");
   stopRuntime(runtime, true);
 }
 
