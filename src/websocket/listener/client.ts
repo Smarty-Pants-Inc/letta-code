@@ -9,14 +9,28 @@ import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agen
 import type { ApprovalCreate } from "@letta-ai/letta-client/resources/agents/messages";
 import WebSocket from "ws";
 import { getClient } from "../../agent/client";
-import { ensureFileIndex, searchFileIndex } from "../../cli/helpers/fileIndex";
+import {
+  ensureFileIndex,
+  getIndexRoot,
+  searchFileIndex,
+  setIndexRoot,
+} from "../../cli/helpers/fileIndex";
+import { setMessageQueueAdder } from "../../cli/helpers/messageQueueBridge";
 import { generatePlanFilePath } from "../../cli/helpers/planName";
+import {
+  subscribe as subscribeToSubagentState,
+  subscribeToStreamEvents as subscribeToSubagentStreamEvents,
+} from "../../cli/helpers/subagentState";
 import { INTERRUPTED_BY_USER } from "../../constants";
 import { type DequeuedBatch, QueueRuntime } from "../../queue/queueRuntime";
-import { createSharedReminderState } from "../../reminders/state";
+import {
+  createSharedReminderState,
+  resetSharedReminderState,
+} from "../../reminders/state";
 import { settingsManager } from "../../settings-manager";
 import { loadTools } from "../../tools/manager";
 import type {
+  AbortMessageCommand,
   ApprovalResponseBody,
   ChangeDeviceStateCommand,
 } from "../../types/protocol_v2";
@@ -57,11 +71,18 @@ import {
   stashRecoveredApprovalInterrupts,
 } from "./interrupts";
 import {
-  getConversationPermissionModeState,
+  getOrCreateConversationPermissionModeStateRef,
   loadPersistedPermissionModeMap,
-  setConversationPermissionModeState,
+  persistPermissionModeMapForRuntime,
 } from "./permissionMode";
-import { isSearchFilesCommand, parseServerMessage } from "./protocol-inbound";
+import {
+  isEnableMemfsCommand,
+  isListInDirectoryCommand,
+  isListMemoryCommand,
+  isReadFileCommand,
+  isSearchFilesCommand,
+  parseServerMessage,
+} from "./protocol-inbound";
 import {
   buildDeviceStatus,
   buildLoopStatus,
@@ -71,7 +92,10 @@ import {
   emitLoopErrorDelta,
   emitLoopStatusUpdate,
   emitRetryDelta,
+  emitRuntimeStateUpdates,
   emitStateSync,
+  emitStreamDelta,
+  emitSubagentStateIfOpen,
   scheduleQueueEmit,
   setLoopStatus,
 } from "./protocol-outbound";
@@ -91,6 +115,7 @@ import {
   shouldAttemptPostStopApprovalRecovery,
 } from "./recovery";
 import {
+  clearActiveRunState,
   clearConversationRuntimeState,
   clearRecoveredApprovalStateForScope,
   clearRuntimeTimers,
@@ -100,6 +125,7 @@ import {
   getListenerStatus,
   getOrCreateConversationRuntime,
   getPendingControlRequestCount,
+  getPendingControlRequests,
   getRecoveredApprovalStateForScope,
   safeEmitWsEvent,
   setActiveRuntime,
@@ -141,32 +167,30 @@ function handleModeChange(
   try {
     const agentId = scope?.agent_id ?? null;
     const conversationId = scope?.conversation_id ?? "default";
-    const current = getConversationPermissionModeState(
+    const current = getOrCreateConversationPermissionModeStateRef(
       runtime,
       agentId,
       conversationId,
     );
 
-    const next = { ...current };
-
     // Track previous mode so ExitPlanMode can restore it
     if (msg.mode === "plan" && current.mode !== "plan") {
-      next.modeBeforePlan = current.mode;
+      current.modeBeforePlan = current.mode;
     }
-    next.mode = msg.mode;
+    current.mode = msg.mode;
 
     // Generate plan file path when entering plan mode
     if (msg.mode === "plan" && !current.planFilePath) {
-      next.planFilePath = generatePlanFilePath();
+      current.planFilePath = generatePlanFilePath();
     }
 
     // Clear plan-related state when leaving plan mode
     if (msg.mode !== "plan") {
-      next.planFilePath = null;
-      next.modeBeforePlan = null;
+      current.planFilePath = null;
+      current.modeBeforePlan = null;
     }
 
-    setConversationPermissionModeState(runtime, agentId, conversationId, next);
+    persistPermissionModeMapForRuntime(runtime);
 
     emitDeviceStatusUpdate(socket, runtime, scope);
 
@@ -236,6 +260,22 @@ function getOrCreateScopedRuntime(
     listener,
     getOrCreateConversationRuntime(listener, agentId, conversationId),
   );
+}
+
+/**
+ * Fallback for unscoped task notifications (e.g., reflection/init spawned
+ * outside turn processing). Picks the first ConversationRuntime that has a
+ * QueueRuntime, or null if none exist.
+ */
+function findFallbackRuntime(
+  listener: ListenerRuntime,
+): ConversationRuntime | null {
+  for (const cr of listener.conversationRuntimes.values()) {
+    if (cr.queueRuntime) {
+      return cr;
+    }
+  }
+  return null;
 }
 
 function resolveRuntimeForApprovalRequest(
@@ -334,6 +374,16 @@ async function handleApprovalResponseInput(
       params.runtime.agent_id,
       params.runtime.conversation_id,
     );
+  if (targetRuntime.cancelRequested && !targetRuntime.isProcessing) {
+    targetRuntime.cancelRequested = false;
+    deps.scheduleQueuePump(
+      targetRuntime,
+      params.socket,
+      params.opts as StartListenerOptions,
+      params.processQueuedTurn,
+    );
+    return false;
+  }
   if (
     await deps.resolveRecoveredApprovalResponse(
       targetRuntime,
@@ -460,6 +510,208 @@ async function handleChangeDeviceStateInput(
   return true;
 }
 
+async function handleAbortMessageInput(
+  listener: ListenerRuntime,
+  params: {
+    command: AbortMessageCommand;
+    socket: WebSocket;
+    opts: {
+      onStatusChange?: StartListenerOptions["onStatusChange"];
+      connectionId?: string;
+    };
+    processQueuedTurn: ProcessQueuedTurn;
+  },
+  deps: Partial<{
+    getActiveRuntime: typeof getActiveRuntime;
+    getPendingControlRequestCount: typeof getPendingControlRequestCount;
+    getPendingControlRequests: typeof getPendingControlRequests;
+    getOrCreateScopedRuntime: typeof getOrCreateScopedRuntime;
+    getRecoveredApprovalStateForScope: typeof getRecoveredApprovalStateForScope;
+    stashRecoveredApprovalInterrupts: typeof stashRecoveredApprovalInterrupts;
+    rejectPendingApprovalResolvers: typeof rejectPendingApprovalResolvers;
+    setLoopStatus: typeof setLoopStatus;
+    clearActiveRunState: typeof clearActiveRunState;
+    emitRuntimeStateUpdates: typeof emitRuntimeStateUpdates;
+    emitInterruptedStatusDelta: typeof emitInterruptedStatusDelta;
+    scheduleQueuePump: typeof scheduleQueuePump;
+    cancelConversation: (
+      agentId: string,
+      conversationId: string,
+    ) => Promise<void>;
+  }> = {},
+): Promise<boolean> {
+  const resolvedDeps = {
+    getActiveRuntime,
+    getPendingControlRequestCount,
+    getPendingControlRequests,
+    getOrCreateScopedRuntime,
+    getRecoveredApprovalStateForScope,
+    stashRecoveredApprovalInterrupts,
+    rejectPendingApprovalResolvers,
+    setLoopStatus,
+    clearActiveRunState,
+    emitRuntimeStateUpdates,
+    emitInterruptedStatusDelta,
+    scheduleQueuePump,
+    cancelConversation: async (agentId: string, conversationId: string) => {
+      const client = await getClient();
+      const cancelId =
+        conversationId === "default" || !conversationId
+          ? agentId
+          : conversationId;
+      await client.conversations.cancel(cancelId);
+    },
+    ...deps,
+  };
+
+  if (
+    listener !== resolvedDeps.getActiveRuntime() ||
+    listener.intentionallyClosed
+  ) {
+    return false;
+  }
+
+  const scope = {
+    agent_id: params.command.runtime.agent_id,
+    conversation_id: params.command.runtime.conversation_id,
+  };
+  const hasPendingApprovals =
+    resolvedDeps.getPendingControlRequestCount(listener, scope) > 0;
+  const scopedRuntime = resolvedDeps.getOrCreateScopedRuntime(
+    listener,
+    scope.agent_id,
+    scope.conversation_id,
+  );
+  const hasActiveTurn = scopedRuntime.isProcessing;
+
+  if (!hasActiveTurn && !hasPendingApprovals) {
+    return false;
+  }
+
+  const interruptedRunId = scopedRuntime.activeRunId;
+  scopedRuntime.cancelRequested = true;
+
+  if (
+    scopedRuntime.activeExecutingToolCallIds.length > 0 &&
+    (!scopedRuntime.pendingInterruptedResults ||
+      scopedRuntime.pendingInterruptedResults.length === 0)
+  ) {
+    scopedRuntime.pendingInterruptedResults =
+      scopedRuntime.activeExecutingToolCallIds.map((toolCallId) => ({
+        type: "tool",
+        tool_call_id: toolCallId,
+        tool_return: INTERRUPTED_BY_USER,
+        status: "error",
+      }));
+    scopedRuntime.pendingInterruptedContext = {
+      agentId: scopedRuntime.agentId || "",
+      conversationId: scopedRuntime.conversationId,
+      continuationEpoch: scopedRuntime.continuationEpoch,
+    };
+    scopedRuntime.pendingInterruptedToolCallIds = [
+      ...scopedRuntime.activeExecutingToolCallIds,
+    ];
+  }
+
+  // Also set interrupt context for active turns without tracked tool IDs
+  // (e.g., background Task tools that spawn subagents)
+  if (
+    hasActiveTurn &&
+    scopedRuntime.activeExecutingToolCallIds.length === 0 &&
+    !scopedRuntime.pendingInterruptedContext
+  ) {
+    scopedRuntime.pendingInterruptedContext = {
+      agentId: scopedRuntime.agentId || "",
+      conversationId: scopedRuntime.conversationId,
+      continuationEpoch: scopedRuntime.continuationEpoch,
+    };
+    // Set empty results array so hasInterruptedCacheForScope can detect the interrupt
+    scopedRuntime.pendingInterruptedResults = [];
+  }
+
+  if (
+    scopedRuntime.activeAbortController &&
+    !scopedRuntime.activeAbortController.signal.aborted
+  ) {
+    scopedRuntime.activeAbortController.abort();
+  }
+
+  const recoveredApprovalState = resolvedDeps.getRecoveredApprovalStateForScope(
+    listener,
+    scope,
+  );
+  if (recoveredApprovalState && !hasActiveTurn) {
+    resolvedDeps.stashRecoveredApprovalInterrupts(
+      scopedRuntime,
+      recoveredApprovalState,
+    );
+  }
+
+  if (hasPendingApprovals) {
+    resolvedDeps.rejectPendingApprovalResolvers(
+      scopedRuntime,
+      "Cancelled by user",
+    );
+  }
+
+  if (hasActiveTurn) {
+    scopedRuntime.lastStopReason = "cancelled";
+    scopedRuntime.isProcessing = false;
+    resolvedDeps.clearActiveRunState(scopedRuntime);
+    resolvedDeps.setLoopStatus(scopedRuntime, "WAITING_ON_INPUT", scope);
+    resolvedDeps.emitRuntimeStateUpdates(scopedRuntime, scope);
+    resolvedDeps.emitInterruptedStatusDelta(params.socket, scopedRuntime, {
+      runId: interruptedRunId,
+      agentId: scope.agent_id,
+      conversationId: scope.conversation_id,
+    });
+  } else if (hasPendingApprovals) {
+    // Populate interrupted cache to prevent stale approval recovery on sync
+    const pendingRequests = resolvedDeps.getPendingControlRequests(
+      listener,
+      scope,
+    );
+    scopedRuntime.pendingInterruptedResults = pendingRequests.map((req) => ({
+      type: "approval" as const,
+      tool_call_id: req.request.tool_call_id,
+      approve: false,
+      reason: "User interrupted the stream",
+    }));
+    scopedRuntime.pendingInterruptedContext = {
+      agentId: scope.agent_id || "",
+      conversationId: scope.conversation_id,
+      continuationEpoch: scopedRuntime.continuationEpoch,
+    };
+    resolvedDeps.emitInterruptedStatusDelta(params.socket, scopedRuntime, {
+      runId: interruptedRunId,
+      agentId: scope.agent_id,
+      conversationId: scope.conversation_id,
+    });
+  }
+
+  if (!hasActiveTurn) {
+    scopedRuntime.cancelRequested = false;
+  }
+
+  const cancelConversationId = scopedRuntime.conversationId;
+  const cancelAgentId = scopedRuntime.agentId;
+  if (cancelAgentId) {
+    void resolvedDeps
+      .cancelConversation(cancelAgentId, cancelConversationId)
+      .catch(() => {
+        // Fire-and-forget
+      });
+  }
+
+  resolvedDeps.scheduleQueuePump(
+    scopedRuntime,
+    params.socket,
+    params.opts as StartListenerOptions,
+    params.processQueuedTurn,
+  );
+  return true;
+}
+
 async function handleCwdChange(
   msg: ChangeCwdMessage,
   socket: WebSocket,
@@ -494,6 +746,21 @@ async function handleCwdChange(
       conversationId,
       normalizedPath,
     );
+
+    // Invalidate session-context only (not agent-info) so the agent gets
+    // updated CWD/git info on the next turn.
+    runtime.reminderState.hasSentSessionContext = false;
+    runtime.reminderState.pendingSessionContextReason = "cwd_changed";
+
+    // If the new cwd is outside the current file-index root, re-root the
+    // index so file search covers the new workspace.  setIndexRoot()
+    // triggers a non-blocking rebuild and does NOT mutate process.cwd(),
+    // keeping concurrent conversations safe.
+    const currentRoot = getIndexRoot();
+    if (!normalizedPath.startsWith(currentRoot)) {
+      setIndexRoot(normalizedPath);
+    }
+
     emitDeviceStatusUpdate(socket, runtime, {
       agent_id: agentId,
       conversation_id: conversationId,
@@ -542,6 +809,7 @@ function stopRuntime(
   runtime: ListenerRuntime,
   suppressCallbacks: boolean,
 ): void {
+  setMessageQueueAdder(null); // Clear bridge for ALL stop paths
   runtime.intentionallyClosed = true;
   clearRuntimeTimers(runtime);
   for (const conversationRuntime of runtime.conversationRuntimes.values()) {
@@ -697,6 +965,13 @@ async function connectWithRetry(
       emitLoopStatusUpdate(socket, runtime);
     } else {
       for (const conversationRuntime of runtime.conversationRuntimes.values()) {
+        // Reset bootstrap reminder state on (re)connect so session-context
+        // and agent-info fire on the first turn of the new connection.
+        // This is intentionally in the open handler, NOT the sync handler,
+        // because the Desktop UMI controller sends sync every ~5 s and
+        // resetting there would re-arm reminders on every periodic sync.
+        resetSharedReminderState(conversationRuntime.reminderState);
+
         const scope = {
           agent_id: conversationRuntime.agentId,
           conversation_id: conversationRuntime.conversationId,
@@ -706,6 +981,66 @@ async function connectWithRetry(
       }
     }
 
+    // Subscribe to subagent state changes and emit snapshots over WS.
+    // Store the unsubscribe function on the runtime for cleanup on close.
+    runtime._unsubscribeSubagentState?.();
+    runtime._unsubscribeSubagentState = subscribeToSubagentState(() => {
+      emitSubagentStateIfOpen(runtime);
+    });
+
+    // Subscribe to subagent stream events and forward as tagged stream_delta.
+    // Events are raw JSON lines from the subagent's stdout (headless format):
+    //   { type: "message", message_type: "tool_call_message", ...LettaStreamingResponse fields }
+    // These are already MessageDelta-shaped (type:"message" + LettaStreamingResponse).
+    runtime._unsubscribeSubagentStreamEvents?.();
+    runtime._unsubscribeSubagentStreamEvents = subscribeToSubagentStreamEvents(
+      (subagentId, event) => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        // The event has { type: "message", message_type, ...LettaStreamingResponse }
+        // plus extra headless fields (session_id, uuid) that pass through harmlessly.
+        emitStreamDelta(
+          socket,
+          runtime,
+          event as unknown as import("../../types/protocol_v2").StreamDelta,
+          undefined, // scope: falls back to listener's default agent/conversation
+          subagentId,
+        );
+      },
+    );
+
+    // Register the message queue bridge to route task notifications into the
+    // correct per-conversation QueueRuntime. This enables background Task
+    // completions to reach the agent in listen mode.
+    setMessageQueueAdder((queuedMessage) => {
+      const targetRuntime =
+        queuedMessage.agentId && queuedMessage.conversationId
+          ? getOrCreateScopedRuntime(
+              runtime,
+              queuedMessage.agentId,
+              queuedMessage.conversationId,
+            )
+          : findFallbackRuntime(runtime);
+
+      if (!targetRuntime?.queueRuntime) {
+        return; // No target — notification dropped
+      }
+
+      targetRuntime.queueRuntime.enqueue({
+        kind: "task_notification",
+        source: "task_notification",
+        text: queuedMessage.text,
+        agentId: queuedMessage.agentId ?? targetRuntime.agentId ?? undefined,
+        conversationId:
+          queuedMessage.conversationId ?? targetRuntime.conversationId,
+      } as Omit<
+        import("../../queue/queueRuntime").TaskNotificationQueueItem,
+        "id" | "enqueuedAt"
+      >);
+
+      // Kick the queue pump so the notification can trigger a standalone turn
+      // (see consumeQueuedTurn notification-aware path in queue.ts).
+      scheduleQueuePump(targetRuntime, socket, opts, processQueuedTurn);
+    });
     runtime.heartbeatInterval = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ping" }));
@@ -754,14 +1089,13 @@ async function connectWithRetry(
         console.log(`[Listen V2] Dropping sync: runtime mismatch or closed`);
         return;
       }
-      await recoverApprovalStateForSync(
-        getOrCreateScopedRuntime(
-          runtime,
-          parsed.runtime.agent_id,
-          parsed.runtime.conversation_id,
-        ),
-        parsed.runtime,
+      const syncScopedRuntime = getOrCreateScopedRuntime(
+        runtime,
+        parsed.runtime.agent_id,
+        parsed.runtime.conversation_id,
       );
+      await recoverApprovalStateForSync(syncScopedRuntime, parsed.runtime);
+
       emitStateSync(socket, runtime, parsed.runtime);
       return;
     }
@@ -899,98 +1233,15 @@ async function connectWithRetry(
     }
 
     if (parsed.type === "abort_message") {
-      if (runtime !== getActiveRuntime() || runtime.intentionallyClosed) {
-        return;
-      }
-
-      const hasPendingApprovals =
-        getPendingControlRequestCount(runtime, {
-          agent_id: parsed.runtime.agent_id,
-          conversation_id: parsed.runtime.conversation_id,
-        }) > 0;
-      const scopedRuntime = getOrCreateScopedRuntime(
-        runtime,
-        parsed.runtime.agent_id,
-        parsed.runtime.conversation_id,
-      );
-      const hasActiveTurn = scopedRuntime.isProcessing;
-
-      if (!hasActiveTurn && !hasPendingApprovals) {
-        return;
-      }
-
-      scopedRuntime.cancelRequested = true;
-      // Eager interrupt capture parity with App/headless:
-      // if tool execution is currently in-flight, queue explicit interrupted
-      // tool results immediately at cancel time (before async catch paths).
-      if (
-        scopedRuntime.activeExecutingToolCallIds.length > 0 &&
-        (!scopedRuntime.pendingInterruptedResults ||
-          scopedRuntime.pendingInterruptedResults.length === 0)
-      ) {
-        scopedRuntime.pendingInterruptedResults =
-          scopedRuntime.activeExecutingToolCallIds.map((toolCallId) => ({
-            type: "tool",
-            tool_call_id: toolCallId,
-            tool_return: INTERRUPTED_BY_USER,
-            status: "error",
-          }));
-        scopedRuntime.pendingInterruptedContext = {
-          agentId: scopedRuntime.agentId || "",
-          conversationId: scopedRuntime.conversationId,
-          continuationEpoch: scopedRuntime.continuationEpoch,
-        };
-        scopedRuntime.pendingInterruptedToolCallIds = [
-          ...scopedRuntime.activeExecutingToolCallIds,
-        ];
-      }
-      if (
-        scopedRuntime.activeAbortController &&
-        !scopedRuntime.activeAbortController.signal.aborted
-      ) {
-        scopedRuntime.activeAbortController.abort();
-      }
-      const recoveredApprovalState = getRecoveredApprovalStateForScope(
-        runtime,
-        {
-          agent_id: parsed.runtime.agent_id,
-          conversation_id: parsed.runtime.conversation_id,
+      await handleAbortMessageInput(runtime, {
+        command: parsed,
+        socket,
+        opts: {
+          onStatusChange: opts.onStatusChange,
+          connectionId: opts.connectionId,
         },
-      );
-      if (recoveredApprovalState && !hasActiveTurn) {
-        stashRecoveredApprovalInterrupts(scopedRuntime, recoveredApprovalState);
-      }
-      if (hasPendingApprovals) {
-        rejectPendingApprovalResolvers(scopedRuntime, "Cancelled by user");
-      }
-
-      if (!hasActiveTurn && hasPendingApprovals) {
-        emitInterruptedStatusDelta(socket, scopedRuntime, {
-          runId: scopedRuntime.activeRunId,
-          agentId: parsed.runtime.agent_id,
-          conversationId: parsed.runtime.conversation_id,
-        });
-      }
-
-      // Backend cancel parity with TUI (App.tsx:5932-5941).
-      // Fire-and-forget — local cancel + queued results are the primary mechanism.
-      const cancelConversationId = scopedRuntime.conversationId;
-      const cancelAgentId = scopedRuntime.agentId;
-      if (cancelAgentId) {
-        getClient()
-          .then((client) => {
-            const cancelId =
-              cancelConversationId === "default" || !cancelConversationId
-                ? cancelAgentId
-                : cancelConversationId;
-            return client.conversations.cancel(cancelId);
-          })
-          .catch(() => {
-            // Fire-and-forget
-          });
-      }
-
-      scheduleQueuePump(scopedRuntime, socket, opts, processQueuedTurn);
+        processQueuedTurn,
+      });
       return;
     }
 
@@ -998,8 +1249,21 @@ async function connectWithRetry(
     if (isSearchFilesCommand(parsed)) {
       void (async () => {
         await ensureFileIndex();
+
+        // Scope search to the conversation's cwd when provided.
+        // The file index stores paths relative to process.cwd(), so we
+        // compute the relative path from the index root to the requested cwd.
+        let searchDir = ".";
+        if (parsed.cwd) {
+          const rel = path.relative(getIndexRoot(), parsed.cwd);
+          // Only scope if cwd is within the index root (not "../" etc.)
+          if (rel && !rel.startsWith("..")) {
+            searchDir = rel;
+          }
+        }
+
         const files = searchFileIndex({
-          searchDir: ".",
+          searchDir,
           pattern: parsed.query,
           deep: true,
           maxResults: parsed.max_results ?? 5,
@@ -1016,9 +1280,257 @@ async function connectWithRetry(
       return;
     }
 
+    // ── Directory listing (no runtime scope required) ──────────────────
+    if (isListInDirectoryCommand(parsed)) {
+      void (async () => {
+        try {
+          const { readdir } = await import("node:fs/promises");
+          const entries = await readdir(parsed.path, { withFileTypes: true });
+
+          // Filter out OS/VCS noise before sorting
+          const IGNORED_NAMES = new Set([
+            ".DS_Store",
+            ".git",
+            ".gitignore",
+            "Thumbs.db",
+          ]);
+          const sortedEntries = entries
+            .filter((e) => !IGNORED_NAMES.has(e.name))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+          const allFolders: string[] = [];
+          const allFiles: string[] = [];
+          for (const e of sortedEntries) {
+            if (e.isDirectory()) {
+              allFolders.push(e.name);
+            } else if (parsed.include_files) {
+              allFiles.push(e.name);
+            }
+          }
+
+          const total = allFolders.length + allFiles.length;
+          const offset = parsed.offset ?? 0;
+          const limit = parsed.limit ?? total;
+
+          // Paginate over the combined [folders, files] list
+          const combined = [...allFolders, ...allFiles];
+          const page = combined.slice(offset, offset + limit);
+          const folders = page.filter((name) => allFolders.includes(name));
+          const files = page.filter((name) => allFiles.includes(name));
+
+          const response: Record<string, unknown> = {
+            type: "list_in_directory_response",
+            path: parsed.path,
+            folders,
+            hasMore: offset + limit < total,
+            total,
+            success: true,
+          };
+          if (parsed.include_files) {
+            response.files = files;
+          }
+          socket.send(JSON.stringify(response));
+        } catch (err) {
+          socket.send(
+            JSON.stringify({
+              type: "list_in_directory_response",
+              path: parsed.path,
+              folders: [],
+              hasMore: false,
+              success: false,
+              error:
+                err instanceof Error ? err.message : "Failed to list directory",
+            }),
+          );
+        }
+      })();
+      return;
+    }
+
+    // ── File reading (no runtime scope required) ─────────────────────
+    if (isReadFileCommand(parsed)) {
+      void (async () => {
+        try {
+          const { readFile } = await import("node:fs/promises");
+          const content = await readFile(parsed.path, "utf-8");
+          socket.send(
+            JSON.stringify({
+              type: "read_file_response",
+              request_id: parsed.request_id,
+              path: parsed.path,
+              content,
+              success: true,
+            }),
+          );
+        } catch (err) {
+          socket.send(
+            JSON.stringify({
+              type: "read_file_response",
+              request_id: parsed.request_id,
+              path: parsed.path,
+              content: null,
+              success: false,
+              error: err instanceof Error ? err.message : "Failed to read file",
+            }),
+          );
+        }
+      })();
+      return;
+    }
+
+    // ── Memory index (no runtime scope required) ─────────────────────
+    if (isListMemoryCommand(parsed)) {
+      void (async () => {
+        try {
+          const { getMemoryFilesystemRoot } = await import(
+            "../../agent/memoryFilesystem"
+          );
+          const { scanMemoryFilesystem, getFileNodes, readFileContent } =
+            await import("../../agent/memoryScanner");
+          const { parseFrontmatter } = await import("../../utils/frontmatter");
+
+          const { existsSync } = await import("node:fs");
+          const { join } = await import("node:path");
+
+          const memoryRoot = getMemoryFilesystemRoot(parsed.agent_id);
+
+          // If the memory directory doesn't have a git repo, memfs
+          // hasn't been initialized — tell the UI so it can show the
+          // enable button instead of an empty file list.
+          const memfsInitialized = existsSync(join(memoryRoot, ".git"));
+
+          if (!memfsInitialized) {
+            socket.send(
+              JSON.stringify({
+                type: "list_memory_response",
+                request_id: parsed.request_id,
+                entries: [],
+                done: true,
+                total: 0,
+                success: true,
+                memfs_initialized: false,
+              }),
+            );
+            return;
+          }
+
+          const treeNodes = scanMemoryFilesystem(memoryRoot);
+          const fileNodes = getFileNodes(treeNodes).filter((n) =>
+            n.name.endsWith(".md"),
+          );
+
+          const CHUNK_SIZE = 5;
+          const total = fileNodes.length;
+
+          for (let i = 0; i < total; i += CHUNK_SIZE) {
+            const chunk = fileNodes.slice(i, i + CHUNK_SIZE);
+            const entries = chunk.map((node) => {
+              const raw = readFileContent(node.fullPath);
+              const { frontmatter, body } = parseFrontmatter(raw);
+              const desc = frontmatter.description;
+              return {
+                relative_path: node.relativePath,
+                is_system:
+                  node.relativePath.startsWith("system/") ||
+                  node.relativePath.startsWith("system\\"),
+                description: typeof desc === "string" ? desc : null,
+                content: body,
+                size: body.length,
+              };
+            });
+
+            const done = i + CHUNK_SIZE >= total;
+            socket.send(
+              JSON.stringify({
+                type: "list_memory_response",
+                request_id: parsed.request_id,
+                entries,
+                done,
+                total,
+                success: true,
+                memfs_initialized: true,
+              }),
+            );
+          }
+
+          // Edge case: no files at all (repo exists but empty)
+          if (total === 0) {
+            socket.send(
+              JSON.stringify({
+                type: "list_memory_response",
+                request_id: parsed.request_id,
+                entries: [],
+                done: true,
+                total: 0,
+                success: true,
+                memfs_initialized: true,
+              }),
+            );
+          }
+        } catch (err) {
+          socket.send(
+            JSON.stringify({
+              type: "list_memory_response",
+              request_id: parsed.request_id,
+              entries: [],
+              done: true,
+              total: 0,
+              success: false,
+              error:
+                err instanceof Error ? err.message : "Failed to list memory",
+            }),
+          );
+        }
+      })();
+      return;
+    }
+
+    // ── Enable memfs command ────────────────────────────────────────────
+    if (isEnableMemfsCommand(parsed)) {
+      void (async () => {
+        try {
+          const { applyMemfsFlags } = await import(
+            "../../agent/memoryFilesystem"
+          );
+          const result = await applyMemfsFlags(parsed.agent_id, true, false);
+          socket.send(
+            JSON.stringify({
+              type: "enable_memfs_response",
+              request_id: parsed.request_id,
+              success: true,
+              memory_directory: result.memoryDir,
+            }),
+          );
+          // Push memory_updated so the UI auto-refreshes its file list
+          socket.send(
+            JSON.stringify({
+              type: "memory_updated",
+              affected_paths: ["*"],
+              timestamp: Date.now(),
+            }),
+          );
+        } catch (err) {
+          socket.send(
+            JSON.stringify({
+              type: "enable_memfs_response",
+              request_id: parsed.request_id,
+              success: false,
+              error:
+                err instanceof Error ? err.message : "Failed to enable memfs",
+            }),
+          );
+        }
+      })();
+      return;
+    }
+
     // ── Terminal commands (no runtime scope required) ──────────────────
     if (parsed.type === "terminal_spawn") {
-      handleTerminalSpawn(parsed, socket, runtime.bootWorkingDirectory);
+      handleTerminalSpawn(
+        parsed,
+        socket,
+        parsed.cwd ?? runtime.bootWorkingDirectory,
+      );
       return;
     }
 
@@ -1049,6 +1561,10 @@ async function connectWithRetry(
       reason: reason.toString(),
     });
 
+    // Clear the bridge before queue clearing to prevent a race where a task
+    // completion enqueues into a shutting-down runtime.
+    setMessageQueueAdder(null);
+
     // Single authoritative queue clear for all close paths
     // (intentional and unintentional). Must fire before early returns.
     for (const conversationRuntime of runtime.conversationRuntimes.values()) {
@@ -1066,6 +1582,10 @@ async function connectWithRetry(
 
     clearRuntimeTimers(runtime);
     killAllTerminals();
+    runtime._unsubscribeSubagentState?.();
+    runtime._unsubscribeSubagentState = undefined;
+    runtime._unsubscribeSubagentStreamEvents?.();
+    runtime._unsubscribeSubagentStreamEvents = undefined;
     runtime.socket = null;
     for (const conversationRuntime of runtime.conversationRuntimes.values()) {
       rejectPendingApprovalResolvers(
@@ -1397,6 +1917,7 @@ export const __listenClientTestUtils = {
   consumeQueuedTurn,
   handleIncomingMessage,
   handleApprovalResponseInput,
+  handleAbortMessageInput,
   handleChangeDeviceStateInput,
   scheduleQueuePump,
   recoverApprovalStateForSync,

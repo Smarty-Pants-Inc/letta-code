@@ -85,13 +85,10 @@ interface MemoryResult {
 interface ParsedMemoryFile {
   frontmatter: {
     description: string;
-    limit: number;
     read_only?: string;
   };
   body: string;
 }
-
-const DEFAULT_LIMIT = 2000;
 
 export async function memory(args: MemoryArgs): Promise<MemoryResult> {
   validateRequiredParams(args, ["command", "reason"], "memory");
@@ -126,7 +123,6 @@ export async function memory(args: MemoryArgs): Promise<MemoryResult> {
     const rendered = renderMemoryFile(
       {
         description,
-        limit: DEFAULT_LIMIT,
       },
       body,
     );
@@ -272,6 +268,9 @@ export async function memory(args: MemoryArgs): Promise<MemoryResult> {
       message: `Memory ${command} made no effective changes; skipped commit and push.`,
     };
   }
+
+  // Emit memory_updated push event so web UI auto-refreshes
+  emitMemoryUpdated(affectedPaths);
 
   return {
     message: `Memory ${command} applied and pushed (${commitResult.sha?.slice(0, 7) ?? "unknown"}).`,
@@ -451,7 +450,6 @@ function parseMemoryFile(content: string): ParsedMemoryFile {
   const body = match[2] ?? "";
 
   let description: string | undefined;
-  let limit: number | undefined;
   let readOnly: string | undefined;
 
   for (const line of frontmatterText.split(/\r?\n/)) {
@@ -462,11 +460,6 @@ function parseMemoryFile(content: string): ParsedMemoryFile {
 
     if (key === "description") {
       description = value;
-    } else if (key === "limit") {
-      const parsedLimit = Number.parseInt(value, 10);
-      if (!Number.isNaN(parsedLimit)) {
-        limit = parsedLimit;
-      }
     } else if (key === "read_only") {
       readOnly = value;
     }
@@ -475,16 +468,9 @@ function parseMemoryFile(content: string): ParsedMemoryFile {
   if (!description || !description.trim()) {
     throw new Error("memory: target file frontmatter is missing 'description'");
   }
-  if (!limit || !Number.isInteger(limit) || limit <= 0) {
-    throw new Error(
-      "memory: target file frontmatter is missing a valid positive 'limit'",
-    );
-  }
-
   return {
     frontmatter: {
       description,
-      limit,
       ...(readOnly !== undefined ? { read_only: readOnly } : {}),
     },
     body,
@@ -492,21 +478,16 @@ function parseMemoryFile(content: string): ParsedMemoryFile {
 }
 
 function renderMemoryFile(
-  frontmatter: { description: string; limit: number; read_only?: string },
+  frontmatter: { description: string; read_only?: string },
   body: string,
 ): string {
   const description = frontmatter.description.trim();
   if (!description) {
     throw new Error("memory: 'description' must not be empty");
   }
-  if (!Number.isInteger(frontmatter.limit) || frontmatter.limit <= 0) {
-    throw new Error("memory: 'limit' must be a positive integer");
-  }
-
   const lines = [
     "---",
     `description: ${sanitizeFrontmatterValue(description)}`,
-    `limit: ${frontmatter.limit}`,
   ];
 
   if (frontmatter.read_only !== undefined) {
@@ -620,4 +601,37 @@ function requireString(
     throw new Error(`memory ${command}: '${field}' must be a non-empty string`);
   }
   return value;
+}
+
+/**
+ * Emit a `memory_updated` push event over the WebSocket so the web UI
+ * can auto-refresh its memory index without polling.
+ */
+function emitMemoryUpdated(affectedPaths: string[]): void {
+  try {
+    // Lazy-import to avoid circular deps — this file is loaded before WS infra
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getActiveRuntime } =
+      require("../../websocket/listener/runtime") as {
+        getActiveRuntime: () => {
+          socket: { readyState: number; send: (data: string) => void } | null;
+        } | null;
+      };
+
+    const runtime = getActiveRuntime();
+    const socket = runtime?.socket;
+    if (!socket || socket.readyState !== 1 /* WebSocket.OPEN */) {
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "memory_updated",
+        affected_paths: affectedPaths,
+        timestamp: Date.now(),
+      }),
+    );
+  } catch {
+    // Best-effort — never break tool execution for a push event
+  }
 }

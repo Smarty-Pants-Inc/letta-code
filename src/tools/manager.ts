@@ -15,6 +15,10 @@ import {
 import { OPENAI_CODEX_PROVIDER_NAME } from "../providers/openai-codex-provider";
 import { telemetry } from "../telemetry";
 import { debugLog } from "../utils/debug";
+import {
+  scrubSecretsFromString,
+  substituteSecretsInArgs,
+} from "./secret-substitution";
 import { TOOL_DEFINITIONS, type ToolName } from "./toolDefinitions";
 
 /**
@@ -35,6 +39,7 @@ const FILE_MODIFYING_TOOLS = new Set([
   "ShellCommand",
   "shell_command",
   "apply_patch",
+  "memory_apply_patch",
   // Gemini toolset
   "Replace",
   "replace",
@@ -120,7 +125,7 @@ export const OPENAI_DEFAULT_TOOLS: ToolName[] = [
   // TODO(codex-parity): add once request_user_input tool exists in raw codex path.
   // "request_user_input",
   "apply_patch",
-  "memory",
+  "memory_apply_patch",
   "update_plan",
   "view_image",
 ];
@@ -146,7 +151,7 @@ export const OPENAI_PASCAL_TOOLS: ToolName[] = [
   "AskUserQuestion",
   "EnterPlanMode",
   "ExitPlanMode",
-  "memory",
+  "memory_apply_patch",
   "Task",
   "TaskOutput",
   "TaskStop",
@@ -193,6 +198,7 @@ const TOOL_PERMISSIONS: Record<ToolName, { requiresApproval: boolean }> = {
   TaskStop: { requiresApproval: true },
   LS: { requiresApproval: false },
   memory: { requiresApproval: true },
+  memory_apply_patch: { requiresApproval: true },
   MultiEdit: { requiresApproval: true },
   Read: { requiresApproval: false },
   view_image: { requiresApproval: false },
@@ -1257,6 +1263,7 @@ export async function executeTool(
     toolCallId?: string;
     onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
     toolContextId?: string;
+    parentScope?: { agentId: string; conversationId: string };
   },
 ): Promise<ToolExecutionResult> {
   const context = options?.toolContextId
@@ -1329,15 +1336,21 @@ export async function executeTool(
       if (options?.onOutput) {
         enhancedArgs = { ...enhancedArgs, onOutput: options.onOutput };
       }
+
+      // Substitute $SECRET_NAME patterns with actual secret values
+      enhancedArgs = substituteSecretsInArgs(enhancedArgs);
     }
 
-    // Inject toolCallId and abort signal for Task tool
+    // Inject toolCallId, abort signal, and parent scope for Task tool
     if (internalName === "Task") {
       if (options?.toolCallId) {
         enhancedArgs = { ...enhancedArgs, toolCallId: options.toolCallId };
       }
       if (options?.signal) {
         enhancedArgs = { ...enhancedArgs, signal: options.signal };
+      }
+      if (options?.parentScope) {
+        enhancedArgs = { ...enhancedArgs, parentScope: options.parentScope };
       }
     }
 
@@ -1383,7 +1396,30 @@ export async function executeTool(
     const toolStatus = recordResult?.status === "error" ? "error" : "success";
 
     // Flatten the response to plain text
-    const flattenedResponse = flattenToolResponse(result);
+    let flattenedResponse = flattenToolResponse(result);
+
+    // Scrub secret values from tool output so they don't leak into agent context
+    if (STREAMING_SHELL_TOOLS.has(internalName)) {
+      if (typeof flattenedResponse === "string") {
+        flattenedResponse = scrubSecretsFromString(flattenedResponse);
+      } else if (Array.isArray(flattenedResponse)) {
+        flattenedResponse = flattenedResponse.map((block) =>
+          block.type === "text"
+            ? { ...block, text: scrubSecretsFromString(block.text) }
+            : block,
+        );
+      }
+      if (stdout) {
+        for (let i = 0; i < stdout.length; i++) {
+          stdout[i] = scrubSecretsFromString(stdout[i]!);
+        }
+      }
+      if (stderr) {
+        for (let i = 0; i < stderr.length; i++) {
+          stderr[i] = scrubSecretsFromString(stderr[i]!);
+        }
+      }
+    }
 
     // Track tool usage (calculate size for multimodal content)
     const responseSize =

@@ -136,6 +136,7 @@ export interface DeviceStatus {
   current_available_skills: AvailableSkillSummary[];
   background_processes: BackgroundProcessSummary[];
   pending_control_requests: PendingControlRequest[];
+  memory_directory: string | null;
 }
 
 export type LoopStatus =
@@ -279,6 +280,39 @@ export type StreamDelta =
 export interface StreamDeltaMessage extends RuntimeEnvelope {
   type: "stream_delta";
   delta: StreamDelta;
+  subagent_id?: string;
+}
+
+/**
+ * Subagent state snapshot.
+ * Emitted via `update_subagent_state` on every subagent mutation.
+ */
+export interface SubagentSnapshotToolCall {
+  id: string;
+  name: string;
+  args: string;
+}
+
+export interface SubagentSnapshot {
+  subagent_id: string;
+  subagent_type: string;
+  description: string;
+  status: "pending" | "running" | "completed" | "error";
+  agent_url: string | null;
+  model?: string;
+  is_background?: boolean;
+  silent?: boolean;
+  tool_call_id?: string;
+  start_time: number;
+  tool_calls: SubagentSnapshotToolCall[];
+  total_tokens: number;
+  duration_ms: number;
+  error?: string;
+}
+
+export interface SubagentStateUpdateMessage extends RuntimeEnvelope {
+  type: "update_subagent_state";
+  subagents: SubagentSnapshot[];
 }
 
 export interface ApprovalResponseAllowDecision {
@@ -363,6 +397,8 @@ export interface TerminalSpawnCommand {
   terminal_id: string;
   cols: number;
   rows: number;
+  /** Agent's current working directory. Falls back to bootWorkingDirectory if absent. */
+  cwd?: string;
 }
 
 export interface TerminalInputCommand {
@@ -391,6 +427,45 @@ export interface SearchFilesCommand {
   request_id: string;
   /** Maximum number of results to return. Defaults to 5. */
   max_results?: number;
+  /** Working directory to scope the search to. When provided, only files
+   *  within this directory (relative to the index root) are returned. */
+  cwd?: string;
+}
+
+export interface ListInDirectoryCommand {
+  type: "list_in_directory";
+  /** Absolute path to list entries in. */
+  path: string;
+  /** When true, response includes non-directory entries in `files`. */
+  include_files?: boolean;
+  /** Max entries to return (folders + files combined). */
+  limit?: number;
+  /** Number of entries to skip before returning. */
+  offset?: number;
+}
+
+export interface ReadFileCommand {
+  type: "read_file";
+  /** Absolute path to the file to read. */
+  path: string;
+  /** Echoed back in the response for request correlation. */
+  request_id: string;
+}
+
+export interface ListMemoryCommand {
+  type: "list_memory";
+  /** Echoed back in every response chunk for request correlation. */
+  request_id: string;
+  /** The agent whose memory to list. */
+  agent_id: string;
+}
+
+export interface EnableMemfsCommand {
+  type: "enable_memfs";
+  /** Echoed back in the response for request correlation. */
+  request_id: string;
+  /** The agent to enable memfs for. */
+  agent_id: string;
 }
 
 export type WsProtocolCommand =
@@ -402,12 +477,17 @@ export type WsProtocolCommand =
   | TerminalInputCommand
   | TerminalResizeCommand
   | TerminalKillCommand
-  | SearchFilesCommand;
+  | SearchFilesCommand
+  | ListInDirectoryCommand
+  | ReadFileCommand
+  | ListMemoryCommand
+  | EnableMemfsCommand;
 
 export type WsProtocolMessage =
   | DeviceStatusUpdateMessage
   | LoopStatusUpdateMessage
   | QueueUpdateMessage
-  | StreamDeltaMessage;
+  | StreamDeltaMessage
+  | SubagentStateUpdateMessage;
 
 export type { StopReasonType };

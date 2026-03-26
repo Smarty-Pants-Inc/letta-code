@@ -1,5 +1,7 @@
 import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agents";
 import WebSocket from "ws";
+import { getMemoryFilesystemRoot } from "../../agent/memoryFilesystem";
+import { getSubagents } from "../../cli/helpers/subagentState";
 import { permissionMode } from "../../permissions/mode";
 import type { DequeuedBatch } from "../../queue/queueRuntime";
 import { settingsManager } from "../../settings-manager";
@@ -18,6 +20,8 @@ import type {
   StopReasonType,
   StreamDelta,
   StreamDeltaMessage,
+  SubagentSnapshot,
+  SubagentStateUpdateMessage,
   WsProtocolMessage,
 } from "../../types/protocol_v2";
 import { SYSTEM_REMINDER_RE } from "./constants";
@@ -27,6 +31,7 @@ import {
   getConversationRuntime,
   getPendingControlRequests,
   getRecoveredApprovalStateForScope,
+  hasInterruptedCacheForScope,
   nextEventSeq,
   safeEmitWsEvent,
 } from "./runtime";
@@ -101,6 +106,7 @@ export function buildDeviceStatus(
       current_available_skills: [],
       background_processes: [],
       pending_control_requests: [],
+      memory_directory: null,
     };
   }
   const scope = getScopeForRuntime(runtime, params);
@@ -127,6 +133,7 @@ export function buildDeviceStatus(
     scopedAgentId,
     scopedConversationId,
   );
+  const interruptedCacheActive = hasInterruptedCacheForScope(listener, scope);
   return {
     current_connection_id: listener.connectionId,
     connection_name: listener.connectionName,
@@ -144,7 +151,12 @@ export function buildDeviceStatus(
     current_loaded_tools: getToolNames(),
     current_available_skills: [],
     background_processes: [],
-    pending_control_requests: getPendingControlRequests(listener, scope),
+    pending_control_requests: interruptedCacheActive
+      ? []
+      : getPendingControlRequests(listener, scope),
+    memory_directory: scopedAgentId
+      ? getMemoryFilesystemRoot(scopedAgentId)
+      : null,
   };
 }
 
@@ -167,18 +179,25 @@ export function buildLoopStatus(
     scopedAgentId,
     scopedConversationId,
   );
+  const interruptedCacheActive = hasInterruptedCacheForScope(listener, scope);
   const recovered = getRecoveredApprovalStateForScope(listener, scope);
-  const status =
-    recovered &&
-    recovered.pendingRequestIds.size > 0 &&
-    conversationRuntime?.loopStatus === "WAITING_ON_INPUT"
+  const status = interruptedCacheActive
+    ? !conversationRuntime?.isProcessing
+      ? "WAITING_ON_INPUT"
+      : (conversationRuntime?.loopStatus ?? "WAITING_ON_INPUT")
+    : recovered &&
+        recovered.pendingRequestIds.size > 0 &&
+        conversationRuntime?.loopStatus === "WAITING_ON_INPUT"
       ? "WAITING_ON_APPROVAL"
       : (conversationRuntime?.loopStatus ?? "WAITING_ON_INPUT");
   return {
     status,
-    active_run_ids: conversationRuntime?.activeRunId
-      ? [conversationRuntime.activeRunId]
-      : [],
+    active_run_ids:
+      interruptedCacheActive && !conversationRuntime?.isProcessing
+        ? []
+        : conversationRuntime?.activeRunId
+          ? [conversationRuntime.activeRunId]
+          : [],
   };
 }
 
@@ -450,6 +469,65 @@ export function emitStateSync(
   emitDeviceStatusUpdate(socket, runtime, scope);
   emitLoopStatusUpdate(socket, runtime, scope);
   emitQueueUpdate(socket, runtime, scope);
+  emitSubagentStateUpdate(socket, runtime, scope);
+}
+
+// ─────────────────────────────────────────────
+// Subagent state
+// ─────────────────────────────────────────────
+
+export function buildSubagentSnapshot(): SubagentSnapshot[] {
+  return getSubagents()
+    .filter(
+      (a) => !a.silent && (a.status === "pending" || a.status === "running"),
+    )
+    .map((a) => ({
+      subagent_id: a.id,
+      subagent_type: a.type,
+      description: a.description,
+      status: a.status,
+      agent_url: a.agentURL,
+      model: a.model,
+      is_background: a.isBackground,
+      silent: a.silent,
+      tool_call_id: a.toolCallId,
+      start_time: a.startTime,
+      tool_calls: a.toolCalls,
+      total_tokens: a.totalTokens,
+      duration_ms: a.durationMs,
+      error: a.error,
+    }));
+}
+
+export function emitSubagentStateUpdate(
+  socket: WebSocket,
+  runtime: RuntimeCarrier,
+  scope?: {
+    agent_id?: string | null;
+    conversation_id?: string | null;
+  },
+): void {
+  const message: Omit<
+    SubagentStateUpdateMessage,
+    "runtime" | "event_seq" | "emitted_at" | "idempotency_key"
+  > = {
+    type: "update_subagent_state",
+    subagents: buildSubagentSnapshot(),
+  };
+  emitProtocolV2Message(socket, runtime, message, scope);
+}
+
+export function emitSubagentStateIfOpen(
+  runtime: RuntimeCarrier,
+  scope?: {
+    agent_id?: string | null;
+    conversation_id?: string | null;
+  },
+): void {
+  const listener = getListenerRuntime(runtime);
+  if (listener?.socket?.readyState === WebSocket.OPEN) {
+    emitSubagentStateUpdate(listener.socket, runtime, scope);
+  }
 }
 
 export function scheduleQueueEmit(
@@ -605,6 +683,7 @@ export function emitStreamDelta(
     agent_id?: string | null;
     conversation_id?: string | null;
   },
+  subagentId?: string,
 ): void {
   const message: Omit<
     StreamDeltaMessage,
@@ -612,6 +691,7 @@ export function emitStreamDelta(
   > = {
     type: "stream_delta",
     delta,
+    ...(subagentId ? { subagent_id: subagentId } : {}),
   };
   emitProtocolV2Message(socket, runtime, message, scope);
 }

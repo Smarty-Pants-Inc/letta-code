@@ -1167,14 +1167,7 @@ export async function handleHeadlessCommand(
   // Skip for subagents - they shouldn't pollute the LRU settings
   if (!isSubagent) {
     await settingsManager.loadLocalProjectSettings();
-    settingsManager.setLocalLastSession(
-      { agentId: agent.id, conversationId },
-      process.cwd(),
-    );
-    settingsManager.setGlobalLastSession({
-      agentId: agent.id,
-      conversationId,
-    });
+    settingsManager.persistSession(agent.id, conversationId);
   }
 
   // Set agent context for tools that need it (e.g., Skill tool, Task tool)
@@ -1373,6 +1366,7 @@ export async function handleHeadlessCommand(
       const approvalInput: ApprovalCreate = {
         type: "approval",
         approvals: executedResults as ApprovalResult[],
+        otid: randomUUID(),
       };
 
       // Inject queued skill content as user message parts (LET-7353)
@@ -1392,6 +1386,7 @@ export async function handleHeadlessCommand(
               type: "text" as const,
               text: sc.content,
             })),
+            otid: randomUUID(),
           });
         }
       }
@@ -1519,8 +1514,16 @@ ${SYSTEM_REMINDER_CLOSE}
     {
       role: "user",
       content: contentParts,
+      otid: randomUUID(),
     },
   ];
+  const refreshCurrentInputOtids = () => {
+    // Terminal stop-reason retries are NEW requests and must not reuse OTIDs.
+    currentInput = currentInput.map((item) => ({
+      ...item,
+      otid: randomUUID(),
+    }));
+  };
 
   // Track lastRunId outside the while loop so it's available in catch block
   let lastKnownRunId: string | null = null;
@@ -1571,6 +1574,7 @@ ${SYSTEM_REMINDER_CLOSE}
                 type: "text" as const,
                 text: sc.content,
               })),
+              otid: randomUUID(),
             },
           ];
         }
@@ -1626,40 +1630,61 @@ ${SYSTEM_REMINDER_CLOSE}
           continue;
         }
 
-        // Check for 409 "conversation busy" error - retry once with delay
-        // TODO: Add pre-stream resume logic for parity with App.tsx.
-        // Before waiting, attempt to discover the in-flight run via
-        // discoverFallbackRunIdWithTimeout() and resume its stream with
-        // client.runs.messages.stream() + drainStream(). See App.tsx
-        // retry_conversation_busy handler for reference implementation.
+        // Check for 409 "conversation busy" - resume via conversation stream endpoint.
+        // Server resolves: (1) otid lookup, (2) active run fallback.
+        // OTID lookup provides server-side request ownership validation.
+        // Falls back to exponential backoff retry if the endpoint fails.
         if (preStreamAction === "retry_conversation_busy") {
-          conversationBusyRetries += 1;
-          const retryDelayMs = getRetryDelayMs({
-            category: "conversation_busy",
-            attempt: conversationBusyRetries,
-          });
+          const messageOtid = currentInput
+            .map((item) => (item as Record<string, unknown>).otid)
+            .find((v): v is string => typeof v === "string");
 
-          // Emit retry message for stream-json mode
-          if (outputFormat === "stream-json") {
-            const retryMsg: RetryMessage = {
-              type: "retry",
-              reason: "error", // 409 conversation busy is a pre-stream error
+          try {
+            const client = await getClient();
+            stream = (await client.conversations.messages.stream(
+              conversationId,
+              // Cast needed until SDK MessageStreamParams includes otid field
+              {
+                agent_id:
+                  conversationId === "default"
+                    ? (agent?.id ?? undefined)
+                    : undefined,
+                otid: messageOtid ?? undefined,
+                starting_after: 0,
+                batch_size: 1000,
+              } as unknown as Parameters<
+                typeof client.conversations.messages.stream
+              >[1],
+            )) as Awaited<ReturnType<typeof sendMessageStream>>;
+            conversationBusyRetries = 0;
+            // Fall through to drain
+          } catch {
+            conversationBusyRetries += 1;
+            const retryDelayMs = getRetryDelayMs({
+              category: "conversation_busy",
               attempt: conversationBusyRetries,
-              max_attempts: CONVERSATION_BUSY_MAX_RETRIES,
-              delay_ms: retryDelayMs,
-              session_id: sessionId,
-              uuid: `retry-conversation-busy-${randomUUID()}`,
-            };
-            console.log(JSON.stringify(retryMsg));
-          } else {
-            console.error(
-              `Conversation is busy, waiting ${Math.round(retryDelayMs / 1000)}s and retrying...`,
-            );
-          }
+            });
 
-          // Wait before retry
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-          continue;
+            if (outputFormat === "stream-json") {
+              const retryMsg: RetryMessage = {
+                type: "retry",
+                reason: "error",
+                attempt: conversationBusyRetries,
+                max_attempts: CONVERSATION_BUSY_MAX_RETRIES,
+                delay_ms: retryDelayMs,
+                session_id: sessionId,
+                uuid: `retry-conversation-busy-${randomUUID()}`,
+              };
+              console.log(JSON.stringify(retryMsg));
+            } else {
+              console.error(
+                `Conversation is busy, waiting ${Math.round(retryDelayMs / 1000)}s and retrying...`,
+              );
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            continue;
+          }
         }
 
         if (preStreamAction === "retry_transient") {
@@ -1975,12 +2000,12 @@ ${SYSTEM_REMINDER_CLOSE}
         );
 
         // Send all results in one batch
-        currentInput = [
-          {
-            type: "approval",
-            approvals: executedResults as ApprovalResult[],
-          },
-        ];
+        const approvalInputWithOtid = {
+          type: "approval" as const,
+          approvals: executedResults as ApprovalResult[],
+          otid: randomUUID(),
+        };
+        currentInput = [approvalInputWithOtid];
         continue;
       }
 
@@ -2036,6 +2061,8 @@ ${SYSTEM_REMINDER_CLOSE}
           // Exponential backoff before retrying the same input
           await new Promise((resolve) => setTimeout(resolve, delayMs));
 
+          // Post-stream retry creates a new run/request.
+          refreshCurrentInputOtids();
           continue;
         }
       }
@@ -2149,6 +2176,7 @@ ${SYSTEM_REMINDER_CLOSE}
               const nudgeMessage: MessageCreate = {
                 role: "system",
                 content: `<system-reminder>The previous response was empty. Please provide a response with either text content or a tool call.</system-reminder>`,
+                otid: randomUUID(),
               };
               currentInput = [...currentInput, nudgeMessage];
             }
@@ -2172,6 +2200,8 @@ ${SYSTEM_REMINDER_CLOSE}
             }
 
             await new Promise((resolve) => setTimeout(resolve, delayMs));
+            // Empty-response retry creates a new run/request.
+            refreshCurrentInputOtids();
             continue;
           }
 
@@ -2205,6 +2235,8 @@ ${SYSTEM_REMINDER_CLOSE}
             }
 
             await new Promise((resolve) => setTimeout(resolve, delayMs));
+            // Post-stream retry creates a new run/request.
+            refreshCurrentInputOtids();
             continue;
           }
         } catch (_e) {
@@ -2538,6 +2570,7 @@ async function runBidirectionalMode(
       const approvalInput: ApprovalCreate = {
         type: "approval",
         approvals: executedResults as ApprovalResult[],
+        otid: randomUUID(),
       };
 
       const approvalMessages: Array<
@@ -2557,6 +2590,7 @@ async function runBidirectionalMode(
               type: "text" as const,
               text: sc.content,
             })),
+            otid: randomUUID(),
           });
         }
       }
@@ -2963,6 +2997,7 @@ async function runBidirectionalMode(
       const approvalInput: ApprovalCreate = {
         type: "approval",
         approvals: executedResults as ApprovalResult[],
+        otid: randomUUID(),
       };
       const approvalStream = await sendMessageStream(
         targetConversationId,
@@ -3808,12 +3843,12 @@ async function runBidirectionalMode(
             );
 
             // Send approval results back to continue
-            currentInput = [
-              {
-                type: "approval",
-                approvals: executedResults,
-              } as unknown as MessageCreate,
-            ];
+            const approvalInputWithOtid = {
+              type: "approval" as const,
+              approvals: executedResults,
+              otid: randomUUID(),
+            };
+            currentInput = [approvalInputWithOtid as unknown as MessageCreate];
 
             // Continue the loop to process the next stream
             continue;

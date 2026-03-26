@@ -129,6 +129,8 @@ export type ConversationRuntime = {
   continuationEpoch: number;
   activeExecutingToolCallIds: string[];
   pendingInterruptedToolCallIds: string[] | null;
+  /** Per-conversation reminder state (session-context, agent-info, etc.). */
+  reminderState: SharedReminderState;
 };
 
 export type ListenerRuntime = {
@@ -159,6 +161,10 @@ export type ListenerRuntime = {
   conversationRuntimes: Map<string, ConversationRuntime>;
   approvalRuntimeKeyByRequestId: Map<string, string>;
   lastEmittedStatus: "idle" | "receiving" | "processing" | null;
+  /** Unsubscribe from subagent state store (set on socket open, cleared on close). */
+  _unsubscribeSubagentState?: (() => void) | undefined;
+  /** Unsubscribe from subagent stream events (set on socket open, cleared on close). */
+  _unsubscribeSubagentStreamEvents?: (() => void) | undefined;
 };
 
 export interface InterruptPopulateInput {

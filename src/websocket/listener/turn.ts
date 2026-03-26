@@ -44,8 +44,9 @@ import {
   populateInterruptQueue,
 } from "./interrupts";
 import {
-  getConversationPermissionModeState,
-  setConversationPermissionModeState,
+  getOrCreateConversationPermissionModeStateRef,
+  persistPermissionModeMapForRuntime,
+  pruneConversationPermissionModeStateIfDefault,
 } from "./permissionMode";
 import {
   emitCanonicalMessageDelta,
@@ -74,8 +75,44 @@ import {
   sendApprovalContinuationWithRetry,
   sendMessageStreamWithRetry,
 } from "./send";
+import { injectQueuedSkillContent } from "./skill-injection";
 import { handleApprovalStop } from "./turn-approval";
 import type { ConversationRuntime, IncomingMessage } from "./types";
+
+function finalizeInterruptedTurn(
+  socket: WebSocket,
+  runtime: ConversationRuntime,
+  params: {
+    runId?: string | null;
+    agentId?: string | null;
+    conversationId: string;
+  },
+): void {
+  const scope = {
+    agent_id: params.agentId ?? null,
+    conversation_id: params.conversationId,
+  };
+  const alreadyProjected =
+    runtime.cancelRequested &&
+    !runtime.isProcessing &&
+    runtime.loopStatus === "WAITING_ON_INPUT" &&
+    runtime.activeRunId === null &&
+    runtime.activeAbortController === null;
+
+  runtime.lastStopReason = "cancelled";
+  runtime.isProcessing = false;
+
+  if (!alreadyProjected) {
+    emitInterruptedStatusDelta(socket, runtime, {
+      runId: params.runId,
+      agentId: params.agentId,
+      conversationId: params.conversationId,
+    });
+    clearActiveRunState(runtime);
+    setLoopStatus(runtime, "WAITING_ON_INPUT", scope);
+    emitRuntimeStateUpdates(runtime, scope);
+  }
+}
 
 export async function handleIncomingMessage(
   msg: IncomingMessage,
@@ -98,16 +135,14 @@ export async function handleIncomingMessage(
     conversationId,
   );
 
-  // Build a mutable permission mode state object for this turn, seeded from the
-  // persistent ListenerRuntime map. Tool implementations (EnterPlanMode, ExitPlanMode)
-  // mutate it in place; we sync the final value back to the map after the turn.
-  const turnPermissionModeState = {
-    ...getConversationPermissionModeState(
-      runtime.listener,
-      normalizedAgentId,
-      conversationId,
-    ),
-  };
+  // Get the canonical mutable permission mode state ref for this turn.
+  // Websocket mode changes and tool implementations (EnterPlanMode/ExitPlanMode)
+  // all mutate this same object in place.
+  const turnPermissionModeState = getOrCreateConversationPermissionModeStateRef(
+    runtime.listener,
+    normalizedAgentId,
+    conversationId,
+  );
 
   const msgRunIds: string[] = [];
   let postStopApprovalRecoveryRetries = 0;
@@ -122,7 +157,9 @@ export async function handleIncomingMessage(
 
   runtime.isProcessing = true;
   runtime.cancelRequested = false;
-  runtime.activeAbortController = new AbortController();
+  const turnAbortController = new AbortController();
+  runtime.activeAbortController = turnAbortController;
+  const turnAbortSignal = turnAbortController.signal;
   runtime.activeWorkingDirectory = turnWorkingDirectory;
   runtime.activeRunId = null;
   runtime.activeRunStartedAt = new Date().toISOString();
@@ -143,10 +180,10 @@ export async function handleIncomingMessage(
   try {
     if (!agentId) {
       runtime.isProcessing = false;
+      clearActiveRunState(runtime);
       setLoopStatus(runtime, "WAITING_ON_INPUT", {
         conversation_id: conversationId,
       });
-      clearActiveRunState(runtime);
       emitRuntimeStateUpdates(runtime, {
         conversation_id: conversationId,
       });
@@ -183,7 +220,11 @@ export async function handleIncomingMessage(
       queuedInterruptedToolCallIds = consumed.interruptedToolCallIds;
     }
 
-    messagesToSend.push(...normalizedMessages);
+    messagesToSend.push(
+      ...normalizedMessages.map((m) =>
+        "content" in m && !m.otid ? { ...m, otid: crypto.randomUUID() } : m,
+      ),
+    );
 
     const firstMessage = normalizedMessages[0];
     const isApprovalMessage =
@@ -193,20 +234,32 @@ export async function handleIncomingMessage(
       "approvals" in firstMessage;
 
     if (!isApprovalMessage) {
-      const { parts: reminderParts } = await buildSharedReminderParts(
-        buildListenReminderContext({
-          agentId: agentId || "",
-          state: runtime.listener.reminderState,
-          resolvePlanModeReminder: getPlanModeReminder,
-        }),
-      );
+      try {
+        const { parts: reminderParts } = await buildSharedReminderParts(
+          buildListenReminderContext({
+            agentId: agentId || "",
+            state: runtime.reminderState,
+            resolvePlanModeReminder: getPlanModeReminder,
+            workingDirectory: turnWorkingDirectory,
+          }),
+        );
 
-      if (reminderParts.length > 0) {
-        for (const m of messagesToSend) {
-          if ("role" in m && m.role === "user" && "content" in m) {
-            m.content = prependReminderPartsToContent(m.content, reminderParts);
-            break;
+        if (reminderParts.length > 0) {
+          for (const m of messagesToSend) {
+            if ("role" in m && m.role === "user" && "content" in m) {
+              m.content = prependReminderPartsToContent(
+                m.content,
+                reminderParts,
+              );
+              break;
+            }
           }
+        }
+      } catch (err) {
+        // Reminder injection is best-effort — failures must not prevent
+        // the user message from being sent to the agent.
+        if (isDebugEnabled()) {
+          console.error("[Listen] Failed to build reminder parts:", err);
         }
       }
     }
@@ -232,24 +285,26 @@ export async function handleIncomingMessage(
     });
 
     const isPureApprovalContinuation = isApprovalOnlyInput(currentInput);
+    const currentInputWithSkillContent = injectQueuedSkillContent(currentInput);
 
     let stream = isPureApprovalContinuation
       ? await sendApprovalContinuationWithRetry(
           conversationId,
-          currentInput,
+          currentInputWithSkillContent,
           buildSendOptions(),
           socket,
           runtime,
-          runtime.activeAbortController.signal,
+          turnAbortSignal,
         )
       : await sendMessageStreamWithRetry(
           conversationId,
-          currentInput,
+          currentInputWithSkillContent,
           buildSendOptions(),
           socket,
           runtime,
-          runtime.activeAbortController.signal,
+          turnAbortSignal,
         );
+    currentInput = currentInputWithSkillContent;
     if (!stream) {
       return;
     }
@@ -275,9 +330,12 @@ export async function handleIncomingMessage(
         stream as Stream<LettaStreamingResponse>,
         buffers,
         () => {},
-        runtime.activeAbortController.signal,
+        turnAbortSignal,
         undefined,
         ({ chunk, shouldOutput, errorInfo }) => {
+          if (runtime.cancelRequested) {
+            return undefined;
+          }
           const maybeRunId = (chunk as { run_id?: unknown }).run_id;
           if (typeof maybeRunId === "string") {
             runId = maybeRunId;
@@ -334,14 +392,23 @@ export async function handleIncomingMessage(
       const approvals = result.approvals || [];
       lastApprovalContinuationAccepted = false;
 
+      if (stopReason === "end_turn" && runtime.cancelRequested) {
+        finalizeInterruptedTurn(socket, runtime, {
+          runId: runId || runtime.activeRunId,
+          agentId: agentId ?? null,
+          conversationId,
+        });
+        break;
+      }
+
       if (stopReason === "end_turn") {
         runtime.lastStopReason = "end_turn";
         runtime.isProcessing = false;
+        clearActiveRunState(runtime);
         setLoopStatus(runtime, "WAITING_ON_INPUT", {
           agent_id: agentId,
           conversation_id: conversationId,
         });
-        clearActiveRunState(runtime);
         emitRuntimeStateUpdates(runtime, {
           agent_id: agentId,
           conversation_id: conversationId,
@@ -351,23 +418,11 @@ export async function handleIncomingMessage(
       }
 
       if (stopReason === "cancelled") {
-        runtime.lastStopReason = "cancelled";
-        runtime.isProcessing = false;
-        emitInterruptedStatusDelta(socket, runtime, {
+        finalizeInterruptedTurn(socket, runtime, {
           runId: runId || runtime.activeRunId,
-          agentId,
+          agentId: agentId ?? null,
           conversationId,
         });
-        setLoopStatus(runtime, "WAITING_ON_INPUT", {
-          agent_id: agentId,
-          conversation_id: conversationId,
-        });
-        clearActiveRunState(runtime);
-        emitRuntimeStateUpdates(runtime, {
-          agent_id: agentId,
-          conversation_id: conversationId,
-        });
-
         break;
       }
 
@@ -417,27 +472,28 @@ export async function handleIncomingMessage(
             agent_id: agentId,
             conversation_id: conversationId,
           });
-          stream =
-            currentInput.length === 1 &&
-            currentInput[0] !== undefined &&
-            "type" in currentInput[0] &&
-            currentInput[0].type === "approval"
-              ? await sendApprovalContinuationWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                )
-              : await sendMessageStreamWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                );
+          const isPureApprovalContinuationRetry =
+            isApprovalOnlyInput(currentInput);
+          const retryInputWithSkillContent =
+            injectQueuedSkillContent(currentInput);
+          stream = isPureApprovalContinuationRetry
+            ? await sendApprovalContinuationWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              )
+            : await sendMessageStreamWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              );
+          currentInput = retryInputWithSkillContent;
           if (!stream) {
             return;
           }
@@ -492,7 +548,7 @@ export async function handleIncomingMessage(
           });
 
           await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (runtime.activeAbortController.signal.aborted) {
+          if (turnAbortSignal.aborted) {
             throw new Error("Cancelled by user");
           }
 
@@ -500,27 +556,28 @@ export async function handleIncomingMessage(
             agent_id: agentId,
             conversation_id: conversationId,
           });
-          stream =
-            currentInput.length === 1 &&
-            currentInput[0] !== undefined &&
-            "type" in currentInput[0] &&
-            currentInput[0].type === "approval"
-              ? await sendApprovalContinuationWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                )
-              : await sendMessageStreamWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                );
+          const isPureApprovalContinuationRetry =
+            isApprovalOnlyInput(currentInput);
+          const retryInputWithSkillContent =
+            injectQueuedSkillContent(currentInput);
+          stream = isPureApprovalContinuationRetry
+            ? await sendApprovalContinuationWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              )
+            : await sendMessageStreamWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              );
+          currentInput = retryInputWithSkillContent;
           if (!stream) {
             return;
           }
@@ -563,7 +620,7 @@ export async function handleIncomingMessage(
           });
 
           await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (runtime.activeAbortController.signal.aborted) {
+          if (turnAbortSignal.aborted) {
             throw new Error("Cancelled by user");
           }
 
@@ -571,27 +628,28 @@ export async function handleIncomingMessage(
             agent_id: agentId,
             conversation_id: conversationId,
           });
-          stream =
-            currentInput.length === 1 &&
-            currentInput[0] !== undefined &&
-            "type" in currentInput[0] &&
-            currentInput[0].type === "approval"
-              ? await sendApprovalContinuationWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                )
-              : await sendMessageStreamWithRetry(
-                  conversationId,
-                  currentInput,
-                  buildSendOptions(),
-                  socket,
-                  runtime,
-                  runtime.activeAbortController.signal,
-                );
+          const isPureApprovalContinuationRetry =
+            isApprovalOnlyInput(currentInput);
+          const retryInputWithSkillContent =
+            injectQueuedSkillContent(currentInput);
+          stream = isPureApprovalContinuationRetry
+            ? await sendApprovalContinuationWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              )
+            : await sendMessageStreamWithRetry(
+                conversationId,
+                retryInputWithSkillContent,
+                buildSendOptions(),
+                socket,
+                runtime,
+                turnAbortSignal,
+              );
+          currentInput = retryInputWithSkillContent;
           if (!stream) {
             return;
           }
@@ -612,33 +670,21 @@ export async function handleIncomingMessage(
           : (stopReason as StopReasonType) || "error";
 
         if (effectiveStopReason === "cancelled") {
-          runtime.lastStopReason = "cancelled";
-          runtime.isProcessing = false;
-          emitInterruptedStatusDelta(socket, runtime, {
+          finalizeInterruptedTurn(socket, runtime, {
             runId: runId || runtime.activeRunId,
-            agentId,
+            agentId: agentId ?? null,
             conversationId,
           });
-          setLoopStatus(runtime, "WAITING_ON_INPUT", {
-            agent_id: agentId,
-            conversation_id: conversationId,
-          });
-          clearActiveRunState(runtime);
-          emitRuntimeStateUpdates(runtime, {
-            agent_id: agentId,
-            conversation_id: conversationId,
-          });
-
           break;
         }
 
         runtime.lastStopReason = effectiveStopReason;
         runtime.isProcessing = false;
+        clearActiveRunState(runtime);
         setLoopStatus(runtime, "WAITING_ON_INPUT", {
           agent_id: agentId,
           conversation_id: conversationId,
         });
-        clearActiveRunState(runtime);
         emitRuntimeStateUpdates(runtime, {
           agent_id: agentId,
           conversation_id: conversationId,
@@ -724,21 +770,10 @@ export async function handleIncomingMessage(
         }
       }
 
-      runtime.lastStopReason = "cancelled";
-      runtime.isProcessing = false;
-      emitInterruptedStatusDelta(socket, runtime, {
+      finalizeInterruptedTurn(socket, runtime, {
         runId: runtime.activeRunId || msgRunIds[msgRunIds.length - 1],
         agentId: agentId || null,
         conversationId,
-      });
-      setLoopStatus(runtime, "WAITING_ON_INPUT", {
-        agent_id: agentId || null,
-        conversation_id: conversationId,
-      });
-      clearActiveRunState(runtime);
-      emitRuntimeStateUpdates(runtime, {
-        agent_id: agentId || null,
-        conversation_id: conversationId,
       });
 
       return;
@@ -746,11 +781,11 @@ export async function handleIncomingMessage(
 
     runtime.lastStopReason = "error";
     runtime.isProcessing = false;
+    clearActiveRunState(runtime);
     setLoopStatus(runtime, "WAITING_ON_INPUT", {
       agent_id: agentId || null,
       conversation_id: conversationId,
     });
-    clearActiveRunState(runtime);
     emitRuntimeStateUpdates(runtime, {
       agent_id: agentId || null,
       conversation_id: conversationId,
@@ -768,22 +803,17 @@ export async function handleIncomingMessage(
       console.error("[Listen] Error handling message:", error);
     }
   } finally {
-    // Sync any permission mode changes made by tools (EnterPlanMode/ExitPlanMode)
-    // back to the persistent ListenerRuntime map so the state survives eviction.
-    setConversationPermissionModeState(
+    // Prune lean defaults only at turn-finalization boundaries (never during
+    // mid-turn mode changes), then persist the canonical map.
+    pruneConversationPermissionModeStateIfDefault(
       runtime.listener,
       normalizedAgentId,
       conversationId,
-      turnPermissionModeState,
     );
+    persistPermissionModeMapForRuntime(runtime.listener);
 
-    // Emit a corrected device status now that the permission mode is synced.
-    // The emitRuntimeStateUpdates() calls earlier in the turn read from the map
-    // before setConversationPermissionModeState() ran, so they emitted a stale
-    // current_permission_mode. This final emission sends the correct value,
-    // ensuring the web UI (and desktop) always reflect mode changes from
-    // EnterPlanMode/ExitPlanMode and that mid-turn web permission changes
-    // are not reverted by a stale emission at turn end.
+    // Emit device status after persistence/pruning so UI reflects the final
+    // canonical state for this scope.
     emitDeviceStatusIfOpen(runtime, {
       agent_id: agentId || null,
       conversation_id: conversationId,
