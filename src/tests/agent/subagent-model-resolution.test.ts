@@ -132,6 +132,8 @@ describe("buildSubagentArgs", () => {
     skills: [],
     memoryBlocks: "none",
     mode: "stateful",
+    fork: false,
+    background: false,
   };
 
   test("fresh subagents use system-custom instead of removed system-append", async () => {

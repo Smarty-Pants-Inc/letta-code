@@ -10887,6 +10887,7 @@ ${SYSTEM_REMINDER_CLOSE}
           name: agentName,
           description: agentDescription,
           lastRunAt: agentLastRunAt,
+          conversationId,
         },
         state: sharedReminderStateRef.current,
         sessionContextReminderEnabled,
