@@ -255,7 +255,7 @@ describe("permission mode retry wiring", () => {
     expect(end).toBeGreaterThan(start);
 
     const segment = source.slice(start, end);
-    expect(segment).toContain('const currentMode = permissionMode.getMode();');
+    expect(segment).toContain("const currentMode = permissionMode.getMode();");
     expect(segment).toContain('if (currentMode === "plan")');
     expect(segment).toContain("resolvePlanExitMode(");
     expect(segment).toContain("permissionMode.getModeBeforePlan()");

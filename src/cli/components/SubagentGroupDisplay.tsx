@@ -120,7 +120,9 @@ const AgentRow = memo(
                 <>
                   <Text dimColor>{` · ${modelDisplay.label}`}</Text>
                   {modelDisplay.reasoningEffortLabel && (
-                    <Text dimColor>{` ${modelDisplay.reasoningEffortLabel}`}</Text>
+                    <Text
+                      dimColor
+                    >{` ${modelDisplay.reasoningEffortLabel}`}</Text>
                   )}
                   {modelDisplay.isByokProvider && (
                     <Text
@@ -199,7 +201,9 @@ const AgentRow = memo(
               <>
                 <Text dimColor>{` · ${modelDisplay.label}`}</Text>
                 {modelDisplay.reasoningEffortLabel && (
-                  <Text dimColor>{`-${modelDisplay.reasoningEffortLabel}`}</Text>
+                  <Text
+                    dimColor
+                  >{`-${modelDisplay.reasoningEffortLabel}`}</Text>
                 )}
                 {modelDisplay.isByokProvider && (
                   <Text

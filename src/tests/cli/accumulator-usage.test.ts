@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LettaStreamingResponse } from "@letta-ai/letta-client/resources/agents/messages";
-import {
-  createBuffers,
-  onChunk,
-  toLines,
-} from "../../cli/helpers/accumulator";
+import { createBuffers, onChunk, toLines } from "../../cli/helpers/accumulator";
 import { createContextTracker } from "../../cli/helpers/contextTracker";
 
 function usageChunk(
