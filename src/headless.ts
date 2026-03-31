@@ -64,9 +64,9 @@ import { createContextTracker } from "./cli/helpers/contextTracker";
 import { formatErrorDetails } from "./cli/helpers/errorFormatter";
 import {
   getReflectionSettings,
+  persistReflectionSettingsForAgent,
   type ReflectionSettings,
   type ReflectionTrigger,
-  reflectionSettingsToLegacyMode,
 } from "./cli/helpers/memoryReminder";
 import {
   type QueuedMessage,
@@ -97,6 +97,8 @@ import {
   syncReminderStateFromContextTracker,
 } from "./reminders/state";
 import { settingsManager } from "./settings-manager";
+import { telemetry } from "./telemetry";
+import { trackBoundaryError } from "./telemetry/errorReporting";
 import {
   isHeadlessAutoAllowTool,
   isInteractiveApprovalTool,
@@ -144,6 +146,30 @@ const EMPTY_RESPONSE_MAX_RETRIES = 2;
 
 // Retry config for 409 "conversation busy" errors (exponential backoff)
 const CONVERSATION_BUSY_MAX_RETRIES = 3; // 10s -> 20s -> 40s
+
+function trackHeadlessBoundaryError(
+  errorType: string,
+  error: unknown,
+  context: string,
+): void {
+  trackBoundaryError({
+    errorType,
+    error,
+    context,
+  });
+}
+
+function reportAndExitHeadless(
+  errorType: string,
+  error: unknown,
+  context: string,
+): never {
+  trackHeadlessBoundaryError(errorType, error, context);
+  console.error(
+    error instanceof Error ? `Error: ${error.message}` : String(error),
+  );
+  process.exit(1);
+}
 
 export type BidirectionalQueuedInput = QueuedTurnInput<
   MessageCreate["content"]
@@ -226,7 +252,7 @@ async function applyReflectionOverrides(
   agentId: string,
   overrides: ReflectionOverrides,
 ): Promise<ReflectionSettings> {
-  const current = getReflectionSettings();
+  const current = getReflectionSettings(agentId);
   const merged: ReflectionSettings = {
     trigger: overrides.trigger ?? current.trigger,
     stepCount: overrides.stepCount ?? current.stepCount,
@@ -255,17 +281,7 @@ async function applyReflectionOverrides(
     await settingsManager.loadLocalProjectSettings();
   }
 
-  const legacyMode = reflectionSettingsToLegacyMode(merged);
-  settingsManager.updateLocalProjectSettings({
-    memoryReminderInterval: legacyMode,
-    reflectionTrigger: merged.trigger,
-    reflectionStepCount: merged.stepCount,
-  });
-  settingsManager.updateSettings({
-    memoryReminderInterval: legacyMode,
-    reflectionTrigger: merged.trigger,
-    reflectionStepCount: merged.stepCount,
-  });
+  await persistReflectionSettingsForAgent(agentId, merged);
 
   return merged;
 }
@@ -278,6 +294,7 @@ export async function handleHeadlessCommand(
   systemInfoReminderEnabledOverride?: boolean,
 ) {
   const { values, positionals } = parsedArgs;
+  telemetry.setSurface("headless");
 
   // Set tool filter if provided (controls which tools are loaded)
   if (values.tools !== undefined) {
@@ -360,6 +377,11 @@ export async function handleHeadlessCommand(
   }
 
   if (!prompt && !isBidirectionalMode) {
+    trackHeadlessBoundaryError(
+      "headless_missing_prompt",
+      "No prompt provided",
+      "headless_startup_input_validation",
+    );
     console.error("Error: No prompt provided");
     process.exit(1);
   }
@@ -369,6 +391,11 @@ export async function handleHeadlessCommand(
 
   // Check for --resume flag (interactive only)
   if (values.resume) {
+    trackHeadlessBoundaryError(
+      "headless_invalid_resume_flag",
+      "--resume is for interactive mode only in headless mode",
+      "headless_startup_flag_validation",
+    );
     console.error(
       "Error: --resume is for interactive mode only (opens conversation selector).\n" +
         "In headless mode, use:\n" +
@@ -426,10 +453,11 @@ export async function handleHeadlessCommand(
     try {
       return parseReflectionOverrides(values);
     } catch (error) {
-      console.error(
-        error instanceof Error ? `Error: ${error.message}` : String(error),
+      return reportAndExitHeadless(
+        "headless_reflection_overrides_failed",
+        error,
+        "headless_startup_reflection_overrides",
       );
-      process.exit(1);
     }
   })();
   const maxTurnsRaw = values["max-turns"];
@@ -445,10 +473,11 @@ export async function handleHeadlessCommand(
         noBundledSkills: noBundledSkillsFlag,
       });
     } catch (error) {
-      console.error(
-        error instanceof Error ? `Error: ${error.message}` : String(error),
+      return reportAndExitHeadless(
+        "headless_skill_sources_failed",
+        error,
+        "headless_startup_skill_sources",
       );
-      process.exit(1);
     }
   })();
 
@@ -462,6 +491,11 @@ export async function handleHeadlessCommand(
       flagName: "max-turns",
     });
   } catch (error) {
+    trackHeadlessBoundaryError(
+      "headless_max_turns_parse_failed",
+      error,
+      "headless_startup_max_turns",
+    );
     console.error(
       `Error: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -483,10 +517,11 @@ export async function handleHeadlessCommand(
     specifiedConversationId = normalized.specifiedConversationId ?? undefined;
     specifiedAgentId = normalized.specifiedAgentId ?? undefined;
   } catch (error) {
-    console.error(
-      error instanceof Error ? `Error: ${error.message}` : String(error),
+    return reportAndExitHeadless(
+      "headless_conversation_shorthand_failed",
+      error,
+      "headless_startup_conversation_shorthand",
     );
-    process.exit(1);
   }
 
   // Validate --conv default requires --agent (unless --new-agent will create one)
@@ -497,6 +532,11 @@ export async function handleHeadlessCommand(
       forceNew,
     });
   } catch (error) {
+    trackHeadlessBoundaryError(
+      "headless_conversation_flag_validation_failed",
+      error,
+      "headless_startup_conversation_flag_validation",
+    );
     console.error(
       error instanceof Error ? `Error: ${error.message}` : String(error),
     );
@@ -555,10 +595,11 @@ export async function handleHeadlessCommand(
       ],
     });
   } catch (error) {
-    console.error(
-      error instanceof Error ? `Error: ${error.message}` : String(error),
+    return reportAndExitHeadless(
+      "headless_flag_conflict_validation_failed",
+      error,
+      "headless_startup_flag_conflicts",
     );
-    process.exit(1);
   }
 
   // Validate --import flag (also accepts legacy --from-af)
@@ -584,10 +625,11 @@ export async function handleHeadlessCommand(
         ],
       });
     } catch (error) {
-      console.error(
-        error instanceof Error ? `Error: ${error.message}` : String(error),
+      return reportAndExitHeadless(
+        "headless_import_flag_validation_failed",
+        error,
+        "headless_startup_import_flag_validation",
       );
-      process.exit(1);
     }
 
     // Check if this looks like a registry handle (@author/name)
@@ -682,6 +724,11 @@ export async function handleHeadlessCommand(
         }
       }
     } catch (error) {
+      trackHeadlessBoundaryError(
+        "headless_memory_blocks_parse_failed",
+        error,
+        "headless_startup_memory_blocks",
+      );
       console.error(
         `Error: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -726,7 +773,12 @@ export async function handleHeadlessCommand(
         specifiedConversationId,
       );
       agent = await client.agents.retrieve(conversation.agent_id);
-    } catch (_error) {
+    } catch (error) {
+      trackHeadlessBoundaryError(
+        "headless_conversation_lookup_failed",
+        error,
+        "headless_startup_conversation_lookup",
+      );
       console.error(`Conversation ${specifiedConversationId} not found`);
       process.exit(1);
     }
@@ -969,6 +1021,11 @@ export async function handleHeadlessCommand(
         skipPromptUpdate: forceNew,
       });
     } catch (error) {
+      trackHeadlessBoundaryError(
+        "headless_memfs_flags_failed",
+        error,
+        "headless_startup_memfs_flags",
+      );
       console.error(
         `Memory flags failed: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -982,6 +1039,11 @@ export async function handleHeadlessCommand(
       agentTags: agent.tags,
       skipPromptUpdate: forceNew,
     }).catch((error) => {
+      trackHeadlessBoundaryError(
+        "headless_memfs_background_pull_failed",
+        error,
+        "headless_runtime_memfs_background_pull",
+      );
       // Log to stderr only — the session is already live.
       console.error(
         `[memfs background pull] ${error instanceof Error ? error.message : String(error)}`,
@@ -1002,12 +1064,22 @@ export async function handleHeadlessCommand(
         },
       );
       if (memfsResult.pullSummary?.includes("CONFLICT")) {
+        trackHeadlessBoundaryError(
+          "headless_memfs_conflict",
+          "Memory has merge conflicts. Run in interactive mode to resolve.",
+          "headless_startup_memfs_sync",
+        );
         console.error(
           "Memory has merge conflicts. Run in interactive mode to resolve.",
         );
         process.exit(1);
       }
     } catch (error) {
+      trackHeadlessBoundaryError(
+        "headless_memfs_sync_failed",
+        error,
+        "headless_startup_memfs_sync",
+      );
       console.error(
         `Memory git sync failed: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -1036,6 +1108,11 @@ export async function handleHeadlessCommand(
   if (isResumingAgent && systemPromptPreset) {
     const result = await updateAgentSystemPrompt(agent.id, systemPromptPreset);
     if (!result.success || !result.agent) {
+      trackHeadlessBoundaryError(
+        "headless_system_prompt_update_failed",
+        result.message,
+        "headless_startup_system_prompt",
+      );
       console.error(`Failed to update system prompt: ${result.message}`);
       process.exit(1);
     }
@@ -2308,6 +2385,11 @@ ${SYSTEM_REMINDER_CLOSE}
         }
       }
 
+      trackHeadlessBoundaryError(
+        "headless_turn_failed",
+        errorMessage,
+        "headless_turn_execution",
+      );
       if (outputFormat === "stream-json") {
         // Emit error event
         const errorMsg: ErrorMessage = {
@@ -2330,6 +2412,11 @@ ${SYSTEM_REMINDER_CLOSE}
 
     // Use comprehensive error formatting (same as TUI mode)
     const errorDetails = formatErrorDetails(error, agent.id);
+    trackHeadlessBoundaryError(
+      "headless_runtime_exception",
+      error,
+      "headless_turn_execution",
+    );
 
     if (outputFormat === "stream-json") {
       const errorMsg: ErrorMessage = {
@@ -3961,6 +4048,11 @@ async function runBidirectionalMode(
       } catch (error) {
         // Use formatErrorDetails for comprehensive error formatting (same as one-shot mode)
         const errorDetails = formatErrorDetails(error, agent.id);
+        trackHeadlessBoundaryError(
+          "headless_bidirectional_runtime_exception",
+          error,
+          "headless_bidirectional_turn",
+        );
         const errorMsg: ErrorMessage = {
           type: "error",
           message: errorDetails,

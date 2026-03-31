@@ -10,17 +10,24 @@ import type {
   EditFileCommand,
   EnableMemfsCommand,
   ExecuteCommandCommand,
+  GetReflectionSettingsCommand,
   InputCommand,
   ListInDirectoryCommand,
   ListMemoryCommand,
+  ListModelsCommand,
   ReadFileCommand,
   RuntimeScope,
   SearchFilesCommand,
+  SetReflectionSettingsCommand,
+  SkillDisableCommand,
+  SkillEnableCommand,
   SyncCommand,
   TerminalInputCommand,
   TerminalKillCommand,
   TerminalResizeCommand,
   TerminalSpawnCommand,
+  UpdateModelCommand,
+  WriteFileCommand,
   WsProtocolCommand,
 } from "../../types/protocol_v2";
 import { isValidApprovalResponseBody } from "./approval";
@@ -282,6 +289,22 @@ export function isReadFileCommand(value: unknown): value is ReadFileCommand {
   );
 }
 
+export function isWriteFileCommand(value: unknown): value is WriteFileCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    path?: unknown;
+    content?: unknown;
+    request_id?: unknown;
+  };
+  return (
+    c.type === "write_file" &&
+    typeof c.path === "string" &&
+    typeof c.content === "string" &&
+    typeof c.request_id === "string"
+  );
+}
+
 export function isEditFileCommand(value: unknown): value is EditFileCommand {
   if (!value || typeof value !== "object") return false;
   const c = value as {
@@ -337,6 +360,54 @@ export function isEnableMemfsCommand(
     typeof c.request_id === "string" &&
     typeof c.agent_id === "string"
   );
+}
+
+export function isListModelsCommand(
+  value: unknown,
+): value is ListModelsCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+  };
+  return c.type === "list_models" && typeof c.request_id === "string";
+}
+
+export function isUpdateModelCommand(
+  value: unknown,
+): value is UpdateModelCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    runtime?: unknown;
+    payload?: unknown;
+  };
+
+  if (
+    c.type !== "update_model" ||
+    typeof c.request_id !== "string" ||
+    !isRuntimeScope(c.runtime) ||
+    !c.payload ||
+    typeof c.payload !== "object"
+  ) {
+    return false;
+  }
+
+  const payload = c.payload as {
+    model_id?: unknown;
+    model_handle?: unknown;
+  };
+  const hasModelId =
+    payload.model_id === undefined || typeof payload.model_id === "string";
+  const hasModelHandle =
+    payload.model_handle === undefined ||
+    typeof payload.model_handle === "string";
+  const hasAtLeastOne =
+    typeof payload.model_id === "string" ||
+    typeof payload.model_handle === "string";
+
+  return hasModelId && hasModelHandle && hasAtLeastOne;
 }
 
 export function isCronListCommand(value: unknown): value is CronListCommand {
@@ -434,6 +505,92 @@ export function isCronDeleteAllCommand(
   );
 }
 
+export function isSkillEnableCommand(
+  value: unknown,
+): value is SkillEnableCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    skill_path?: unknown;
+  };
+  return (
+    c.type === "skill_enable" &&
+    typeof c.request_id === "string" &&
+    typeof c.skill_path === "string"
+  );
+}
+
+export function isSkillDisableCommand(
+  value: unknown,
+): value is SkillDisableCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    name?: unknown;
+  };
+  return (
+    c.type === "skill_disable" &&
+    typeof c.request_id === "string" &&
+    typeof c.name === "string"
+  );
+}
+
+export function isGetReflectionSettingsCommand(
+  value: unknown,
+): value is GetReflectionSettingsCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    runtime?: unknown;
+  };
+  return (
+    c.type === "get_reflection_settings" &&
+    typeof c.request_id === "string" &&
+    isRuntimeScope(c.runtime)
+  );
+}
+
+export function isSetReflectionSettingsCommand(
+  value: unknown,
+): value is SetReflectionSettingsCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    runtime?: unknown;
+    settings?: unknown;
+    scope?: unknown;
+  };
+  if (
+    c.type !== "set_reflection_settings" ||
+    typeof c.request_id !== "string" ||
+    !isRuntimeScope(c.runtime) ||
+    !c.settings ||
+    typeof c.settings !== "object"
+  ) {
+    return false;
+  }
+  const settings = c.settings as {
+    trigger?: unknown;
+    step_count?: unknown;
+  };
+  return (
+    (settings.trigger === "off" ||
+      settings.trigger === "step-count" ||
+      settings.trigger === "compaction-event") &&
+    typeof settings.step_count === "number" &&
+    Number.isInteger(settings.step_count) &&
+    settings.step_count > 0 &&
+    (c.scope === undefined ||
+      c.scope === "local_project" ||
+      c.scope === "global" ||
+      c.scope === "both")
+  );
+}
+
 export function isExecuteCommandCommand(
   value: unknown,
 ): value is ExecuteCommandCommand {
@@ -470,14 +627,21 @@ export function parseServerMessage(
       isSearchFilesCommand(parsed) ||
       isListInDirectoryCommand(parsed) ||
       isReadFileCommand(parsed) ||
+      isWriteFileCommand(parsed) ||
       isEditFileCommand(parsed) ||
       isListMemoryCommand(parsed) ||
       isEnableMemfsCommand(parsed) ||
+      isListModelsCommand(parsed) ||
+      isUpdateModelCommand(parsed) ||
       isCronListCommand(parsed) ||
       isCronAddCommand(parsed) ||
       isCronGetCommand(parsed) ||
       isCronDeleteCommand(parsed) ||
       isCronDeleteAllCommand(parsed) ||
+      isSkillEnableCommand(parsed) ||
+      isSkillDisableCommand(parsed) ||
+      isGetReflectionSettingsCommand(parsed) ||
+      isSetReflectionSettingsCommand(parsed) ||
       isExecuteCommandCommand(parsed)
     ) {
       return parsed as WsProtocolCommand;
